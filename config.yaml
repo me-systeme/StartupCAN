@@ -1,0 +1,31 @@
+# -----------------------------------------------------------------------------
+# DLL / CAN configuration
+# -----------------------------------------------------------------------------
+dll:
+  # Maximum number of samples the DLL buffer stores per device read cycle.
+  # This value is used to size read_multiple() calls and affects latency/throughput.
+  mybuffersize: 300
+
+  # CAN bus baud rate in bits per second.
+  canbaud: 250000
+
+devices:
+  config:
+    - dev_no: 1
+      cmd_id: "0x100"
+      answer_id: "0x101"
+    - dev_no: 2
+      cmd_id: "0x0FC"
+      answer_id: "0x0FD"
+    - dev_no: 3
+      cmd_id: "0x0FE"
+      answer_id: "0x0FF"
+    - dev_no: 4
+      cmd_id: "0x0FA"
+      answer_id: "0x0FB"
+    - dev_no: 5
+      cmd_id: "0x0F8"
+      answer_id: "0x0F9"
+    - dev_no: 6
+      cmd_id: "0x0F6"
+      answer_id: "0x0F7"
