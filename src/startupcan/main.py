@@ -11,7 +11,7 @@ import sys
 import time
 
 from startupcan.config import DEVICE_CONFIG
-from startupcan.gsv86can import GSV86CAN
+from startupcan.gsv86can import GSV86CAN, CANSET_CAN_IN_CMD_ID, CANSET_CAN_OUT_ANS_ID
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +81,17 @@ def main() -> int:
                 print(f"[DEV {dev_no}] get_can_settings FAIL: {e}")
 
             print("-" * 80)
+
+        # dev_no = 1
+
+        # # neue IDs schreiben
+        # gsv.set_can_settings(dev_no, CANSET_CAN_IN_CMD_ID, 0x100)
+        # gsv.set_can_settings(dev_no, CANSET_CAN_OUT_ANS_ID, 0x101)
+
+        # # optional verifizieren
+        # cmd_new = gsv.get_can_settings(dev_no, CANSET_CAN_IN_CMD_ID)
+        # ans_new = gsv.get_can_settings(dev_no, CANSET_CAN_OUT_ANS_ID)
+        # print(hex(cmd_new), hex(ans_new))
 
         return 0
 

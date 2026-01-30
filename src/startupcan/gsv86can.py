@@ -63,6 +63,19 @@ _IN_TYPE_NAMES = {
     INTYP_TEMP_K:       "Type K",
 }
 
+# ------------------------------------------------------------------------------
+# CAN settings indices (from DLL header)
+# ------------------------------------------------------------------------------
+CANSET_CAN_IN_CMD_ID     = 0  # CAN_IN command Can-ID
+CANSET_CAN_OUT_ANS_ID    = 1  # CAN_OUT response Can-ID
+CANSET_CAN_CV_VALUE_ID   = 2  # CAN_CV value Can-ID
+CANSET_CAN_CAST_MCAST_ID = 3  # CAN_CAST multicast Can-ID
+CANSET_CAN_BAUD_HZ       = 4  # CAN_BAUD baudrate (in Hz)
+CANSET_CAN_FLAGS         = 5  # CAN_FLAGS
+
+CAN_ID_STD_MAX = 0x7FF
+CAN_ID_EXT_FLAG = 0x80000000
+
 class GSV86CAN:
     """
     Python wrapper for the GSV86CAN DLL.
@@ -190,6 +203,13 @@ class GSV86CAN:
             ct.POINTER(ct.c_ulong),   # out Settings (unsigned long*)
         ]
         self.dll.GSV86CANgetCANSettings.restype = ct.c_int
+
+        self.dll.GSV86CANsetCANSettings.argtypes = [
+            ct.c_int,        # DevNo
+            ct.c_int,        # Index
+            ct.c_ulong,      # Settings (unsigned long)
+        ]
+        self.dll.GSV86CANsetCANSettings.restype = ct.c_int
 
     # -------------------------------------------------------------------------
     # Basic information / lifecycle
@@ -377,6 +397,39 @@ class GSV86CAN:
             raise RuntimeError(self.last_error_text(dev_no))
 
         return int(settings.value)
+    
+    def set_can_settings(self, dev_no: int, index: int, settings: int) -> None:
+        """
+        Write CAN settings value to the device.
+
+        Mirrors the C function:
+            int GSV86CANsetCANSettings(int DevNo, int Index, unsigned long Settings)
+
+        Index meanings (per header):
+            0: CAN_IN  command Can-ID
+            1: CAN_OUT response Can-ID
+            2: CAN_CV  value Can-ID
+            3: CAN_CAST multicast Can-ID
+            4: CAN_BAUD baudrate (Hz)
+            5: CAN_FLAGS
+
+        Settings meanings (per header):
+            can-ID:
+              0x00000000-0x000007FF: std-id
+              0x80000000-0x9FFFFFFF: ext-id (0x80000000 flag set)
+            baudrate:
+              1000000, 500000, 250000, 125000, 100000, 50000, 25000, 12500, 10000
+
+        Raises
+        ------
+        RuntimeError if the DLL returns GSV_ERROR.
+        """
+        # Ensure 32-bit unsigned range (what the DLL expects)
+        val = ct.c_ulong(int(settings) & 0xFFFFFFFF)
+
+        r = self.dll.GSV86CANsetCANSettings(dev_no, int(index), val)
+        if r == GSV_ERROR:
+            raise RuntimeError(self.last_error_text(dev_no))
 
     def get_serial_no(self, dev_no: int) -> int:
         """
