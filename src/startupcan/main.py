@@ -25,6 +25,8 @@ IDX_CAN_BAUD       = 4
 # IDX_CAN_BAUD      = 2
 # IDX_CAN_FLAGS     = 3
 
+CMD_BASE = 0x100
+ANS_BASE = 0x101
 
 def fmt_can_id(x: int) -> str:
     # CAN IDs sind oft 11-bit: 0..0x7FF; manche Systeme nutzen 29-bit.
@@ -75,7 +77,40 @@ def main() -> int:
                 # Optional sanity check vs config
                 if cmd_read != cmd_id or ans_read != ans_id:
                     print(f"[DEV {dev_no}] WARN: IDs differ from YAML "
-                          f"(yaml CMD={fmt_can_id(cmd_id)} ANS={fmt_can_id(ans_id)})")
+                          f"(yaml CMD={fmt_can_id(CMD_BASE)} ANS={fmt_can_id(ANS_BASE)})")
+                # if dev_no == 6:
+                #     cmd_new = 0x105
+                #     ans_new = 0x206
+
+                #     gsv.set_can_settings(dev_no, CANSET_CAN_IN_CMD_ID, cmd_new)
+                #     gsv.set_can_settings(dev_no, CANSET_CAN_OUT_ANS_ID, ans_new)
+
+                #     # optional verifizieren
+                #     cmd_new = gsv.get_can_settings(dev_no, CANSET_CAN_IN_CMD_ID)
+                #     ans_new = gsv.get_can_settings(dev_no, CANSET_CAN_OUT_ANS_ID)
+                #     print(hex(cmd_new), hex(ans_new))
+
+                #     # we need this to make the changes take effect
+                #     gsv.reset_device(dev_no)
+
+                #     time.sleep(2)
+
+                #     # this is for reaching our device again 
+                #     # without it we get a timeout on every call
+                #     gsv.release(dev_no)
+
+                #     gsv.activate(dev_no, cmd_new, ans_new)
+                #     print(f"[DEV {dev_no}] activated with new CMD_ID   = {cmd_new}")
+                #     print(f"[DEV {dev_no}] activated with new ANS_ID   = {ans_new}")
+
+                #     # sn = gsv.get_serial_no(dev_no)
+                #     # print(f"serial number is {sn}")
+
+                #     # optional verifizieren
+                #     cmd_new = gsv.get_can_settings(dev_no, CANSET_CAN_IN_CMD_ID)
+                #     ans_new = gsv.get_can_settings(dev_no, CANSET_CAN_OUT_ANS_ID)
+                #     print(hex(cmd_new), hex(ans_new))
+
 
             except Exception as e:
                 print(f"[DEV {dev_no}] get_can_settings FAIL: {e}")
@@ -85,8 +120,31 @@ def main() -> int:
         # dev_no = 1
 
         # # neue IDs schreiben
-        # gsv.set_can_settings(dev_no, CANSET_CAN_IN_CMD_ID, 0x100)
-        # gsv.set_can_settings(dev_no, CANSET_CAN_OUT_ANS_ID, 0x101)
+        # # gsv.set_can_settings(dev_no, CANSET_CAN_IN_CMD_ID, 0x100)
+        # # gsv.set_can_settings(dev_no, CANSET_CAN_OUT_ANS_ID, 0x101)
+        # gsv.set_can_settings(dev_no, CANSET_CAN_IN_CMD_ID, 0x0F4)
+        # gsv.set_can_settings(dev_no, CANSET_CAN_OUT_ANS_ID, 0x0F5)
+
+        # # optional verifizieren
+        # cmd_new = gsv.get_can_settings(dev_no, CANSET_CAN_IN_CMD_ID)
+        # ans_new = gsv.get_can_settings(dev_no, CANSET_CAN_OUT_ANS_ID)
+        # print(hex(cmd_new), hex(ans_new))
+
+        # # we need this to make the changes take effect
+        # gsv.reset_device(dev_no)
+
+        # time.sleep(2)
+
+        # # this is for reaching our device again 
+        # # without it we get a timeout on every call
+        # gsv.release(dev_no)
+
+        # gsv.activate(dev_no, cmd_new, ans_new)
+        # print(f"[DEV {dev_no}] activated with new CMD_ID   = {cmd_new}")
+        # print(f"[DEV {dev_no}] activated with new ANS_ID   = {ans_new}")
+
+        # # sn = gsv.get_serial_no(dev_no)
+        # # print(f"serial number is {sn}")
 
         # # optional verifizieren
         # cmd_new = gsv.get_can_settings(dev_no, CANSET_CAN_IN_CMD_ID)

@@ -175,6 +175,9 @@ class GSV86CAN:
         ]
         self.dll.GSV86CANloadSettings.restype = ct.c_int
 
+        self.dll.GSV86CANresetDevice.argtypes = [ct.c_int]  # DevNo
+        self.dll.GSV86CANresetDevice.restype = ct.c_int
+
         self.dll.GSV86CANMEwriteInputRange.argtypes = [
             ct.c_int,      # DevNo
             ct.c_int,      # Chan (0..6/8, 0 sets all channels)
@@ -363,6 +366,27 @@ class GSV86CAN:
         if r == GSV_ERROR:
             raise RuntimeError(self.last_error_text(dev_no))
     
+    def reset_device(self, dev_no: int) -> None:
+        """
+        Reset the device (system reset) via DLL.
+
+        Mirrors the C function:
+            int GSV86CANresetDevice(int DevNo)
+
+        Notes:
+        - The DLL implementation (per your C code) may clear the DLL buffer,
+        wait ~0.5s, and restore TX state automatically.
+        - If the device FW is too old, the DLL returns GSV_ERROR (ERR_NOT_SUPPORTED).
+
+        Raises
+        ------
+        RuntimeError
+            If the DLL returns GSV_ERROR.
+        """
+        r = self.dll.GSV86CANresetDevice(int(dev_no))
+        if r == GSV_ERROR:
+            raise RuntimeError(self.last_error_text(dev_no))
+
     # -------------------------------------------------------------------------
     # Device status / metadata
     # -------------------------------------------------------------------------
