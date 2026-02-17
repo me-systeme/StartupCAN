@@ -11,21 +11,30 @@ dll:
 
 devices:
   config:
-    - dev_no: 1
-      cmd_id: "0x100"
-      answer_id: "0x201"
-    - dev_no: 2
-      cmd_id: "0x101"
-      answer_id: "0x202"
-    - dev_no: 3
-      cmd_id: "0x102"
-      answer_id: "0x203"
-    - dev_no: 4
-      cmd_id: "0x103"
-      answer_id: "0x204"
-    - dev_no: 5
-      cmd_id: "0x104"
-      answer_id: "0x205"
-    - dev_no: 6
-      cmd_id: "0x105"
-      answer_id: "0x206"
+    assign:
+      default_cmd_id: "0x100"
+      default_ans_id: "0x101"
+    current: 
+      default: false
+      ids:
+        - dev_no: 1
+          cmd_id: "0x102"
+          answer_id: "0x103"
+        - dev_no: 2
+          cmd_id: "0x104"
+          answer_id: "0x105"
+        - dev_no: 3
+          cmd_id: "0x106"
+          answer_id: "0x107"
+    new:
+      default: true
+      ids:
+        - dev_no: 1
+          cmd_id: "0x102"
+          answer_id: "0x103"
+        - dev_no: 2
+          cmd_id: "0x104"
+          answer_id: "0x105"
+        - dev_no: 3
+          cmd_id: "0x106"
+          answer_id: "0x107"

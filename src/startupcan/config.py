@@ -108,15 +108,141 @@ def load_config(path: Path) -> dict:
     # - Per-device config entries
     # -------------------------------------------------------------------------
     devices_section = cfg.get("devices", {}) or {}
+    cfg_block = (devices_section.get("config", {}) or {})
 
-    device_config = []
-    for d in devices_section["config"]:
 
-        device_config.append({
-            "dev_no": int(d["dev_no"]),
-            "cmd_id": _parse_hex(d["cmd_id"]),
-            "answer_id": _parse_hex(d["answer_id"]),
-        })
+    # optionaler Assign-Block (Defaultwerte ok)
+    assign = cfg_block.get("assign", {}) or {}
+    default_cmd_id = _parse_hex(assign.get("default_cmd_id", "0x100"))
+    default_ans_id = _parse_hex(assign.get("default_ans_id", "0x101"))
+
+    # current/new blocks (new YAML structure)
+    current_block = cfg_block.get("current", {}) or {}
+    new_block = cfg_block.get("new", {}) or {}
+
+    current_default_mode = bool(current_block.get("default", False))
+    new_default_mode = bool(new_block.get("default", False))
+
+    def _norm_list(lst):
+        out = []
+        for d in (lst or []):
+            out.append({
+                "dev_no": int(d["dev_no"]),
+                "cmd_id": _parse_hex(d["cmd_id"]),
+                "answer_id": _parse_hex(d["answer_id"]),
+            })
+        return out
+    
+    device_current = _norm_list(current_block.get("ids", []))
+    device_new_raw = _norm_list(new_block.get("ids", []))
+
+    # -------------------------------------------------------------------------
+    # Allowed mode combinations
+    # -------------------------------------------------------------------------
+    
+    def _id_pairs(items: list[dict]) -> set[tuple[int, int]]:
+        return {(int(d["cmd_id"]), int(d["answer_id"])) for d in (items or [])}
+    
+    def _id_numbers(items: list[dict]) -> set[int]:
+        s: set[int] = set()
+        for d in (items or []):
+            s.add(int(d["cmd_id"]))
+            s.add(int(d["answer_id"]))
+        return s
+
+    DEFAULT_PAIR = (int(default_cmd_id), int(default_ans_id))
+    # Forbidden combo
+    if current_default_mode and new_default_mode:
+        raise ValueError(
+            "Ungültige Konfiguration: current.default=true und new.default=true ist nicht erlaubt."
+        )
+    
+    # Case 1: current=false, new=false
+    if (not current_default_mode) and (not new_default_mode):
+        if not device_current:
+            raise ValueError("current.default=false & new.default=false: devices.config.current.ids darf nicht leer sein.")
+        if not device_new_raw:
+            raise ValueError("current.default=false & new.default=false: devices.config.new.ids darf nicht leer sein.")
+        if len(device_current) != len(device_new_raw):
+            raise ValueError(
+                "current.default=false & new.default=false: current.ids und new.ids müssen gleich lang sein."
+            )
+        
+        current_nums = _id_numbers(device_current)
+        new_nums = _id_numbers(device_new_raw)
+
+        overlap_nums = current_nums & new_nums
+        if overlap_nums:
+            ex = next(iter(overlap_nums))
+            raise ValueError(
+                "current.default=false & new.default=false: "
+                "Keine einzelne CAN-ID Zahl (weder cmd noch ans) aus new.ids darf in current.ids vorkommen "
+                f"(und umgekehrt). Beispiel Überschneidung: 0x{ex:X} ({ex})."
+            )
+
+        dev_nos_for_run = [d["dev_no"] for d in device_current]  # Quelle: current
+        # Ziel ist new.ids wie angegeben
+        device_new = device_new_raw
+        # Initial aktivieren mit current.ids
+        device_config = device_current
+
+    # Case 2: current=true, new=false
+    elif current_default_mode and (not new_default_mode):
+        if not device_new_raw:
+            raise ValueError("current.default=true & new.default=false: devices.config.new.ids darf nicht leer sein.")
+
+        dev_nos_for_run = [d["dev_no"] for d in device_new_raw]  # Quelle: new
+        device_new = device_new_raw
+
+        # Initial aktivieren mit Default IDs (Wizard)
+        device_config = [
+            {"dev_no": int(n), "cmd_id": default_cmd_id, "answer_id": default_ans_id}
+            for n in dev_nos_for_run
+        ]
+
+        new_nums = _id_numbers(device_new)
+        if default_cmd_id in new_nums or default_ans_id in new_nums:
+            # dev_no für bessere Fehlermeldung finden
+            offenders = []
+            for d in device_new:
+                if d["cmd_id"] == default_cmd_id or d["answer_id"] == default_ans_id:
+                    offenders.append(
+                        f"dev_no={d['dev_no']} CMD={hex(d['cmd_id'])} ANS={hex(d['answer_id'])}"
+                    )
+
+            raise ValueError(
+                "current.default=true: Ziel-IDs dürfen keine Default-ID enthalten "
+                f"(Default CMD={hex(default_cmd_id)} ANS={hex(default_ans_id)}). "
+                "Betroffene Einträge: " + "; ".join(offenders)
+            )
+    
+    # Case 3: current=false, new=true
+    else:  # (not current_default_mode) and new_default_mode
+        if not device_current:
+            raise ValueError("current.default=false & new.default=true: devices.config.current.ids darf nicht leer sein.")
+
+        current_nums = _id_numbers(device_current)
+
+        if default_cmd_id in current_nums or default_ans_id in current_nums:
+            raise ValueError(
+                "current.default=false & new.default=true: "
+                "Keine einzelne Default CAN-ID (weder cmd noch ans) "
+                "darf bereits in current.ids vorkommen "
+                f"(Default CMD={hex(default_cmd_id)} "
+                f"ANS={hex(default_ans_id)})."
+            )
+        
+        dev_nos_for_run = [d["dev_no"] for d in device_current]  # Quelle: current
+
+        # Ziel ist Default IDs (Reset), new.ids darf leer sein
+        device_new = [
+            {"dev_no": int(n), "cmd_id": default_cmd_id, "answer_id": default_ans_id}
+            for n in dev_nos_for_run
+        ]
+
+        # Initial aktivieren mit current.ids
+        device_config = device_current
+    
 
     # -------------------------------------------------------------------------
     # Return normalized configuration
@@ -124,7 +250,12 @@ def load_config(path: Path) -> dict:
     return {
         "MYBUFFERSIZE": mybuffersize,
         "CANBAUD": canbaud,
+        "CURRENT_DEFAULT_MODE": current_default_mode,
+        "NEW_DEFAULT_MODE": new_default_mode,
         "DEVICE_CONFIG": device_config,
+        "DEVICE_CURRENT": device_current,   # optional
+        "DEVICE_NEW": device_new,           # Ziel-IDs
+        "ASSIGN": {"DEFAULT_CMD_ID": default_cmd_id, "DEFAULT_ANS_ID": default_ans_id},
     }
 
     
@@ -163,3 +294,11 @@ DEVICE_CONFIG = CONFIG["DEVICE_CONFIG"]
 
 MYBUFFERSIZE = CONFIG["MYBUFFERSIZE"]
 CANBAUD = CONFIG["CANBAUD"]
+
+CURRENT_DEFAULT_MODE = CONFIG["CURRENT_DEFAULT_MODE"]
+NEW_DEFAULT_MODE = CONFIG["NEW_DEFAULT_MODE"]
+DEVICE_CURRENT = CONFIG["DEVICE_CURRENT"]
+DEVICE_NEW = CONFIG["DEVICE_NEW"]
+ASSIGN = CONFIG["ASSIGN"]
+DEFAULT_CMD_ID = ASSIGN["DEFAULT_CMD_ID"]
+DEFAULT_ANS_ID = ASSIGN["DEFAULT_ANS_ID"]
