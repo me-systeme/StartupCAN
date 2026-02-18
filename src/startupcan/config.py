@@ -196,6 +196,23 @@ def load_config(path: Path) -> dict:
             s.add(int(d["answer_id"]))
         return s
     
+    # # -------------------------------------------------------------------------
+    # # UNKNOWN MODE: current wird ignoriert, Ziel kommt aus new.ids
+    # # -------------------------------------------------------------------------
+    # if current_unknown_mode:
+    #     # In unknown-mode muss es Ziel-IDs geben (wir wollen auf definierte IDs umstellen)
+    #     if new_default_mode:
+    #         raise ValueError(
+    #             "devices.config.current.unknown=true: new.default=true ist nicht erlaubt "
+    #             "(du brauchst konkrete Ziel-IDs in new.ids)."
+    #         )
+    #     if not device_new_raw:
+    #         raise ValueError(
+    #             "devices.config.current.unknown=true: devices.config.new.ids darf nicht leer sein "
+    #             "(Ziel-IDs müssen definiert sein)."
+    #         )
+        
+
     # Forbidden combo
     if current_default_mode and new_default_mode:
         raise ValueError(
