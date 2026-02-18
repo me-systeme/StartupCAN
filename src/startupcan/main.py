@@ -20,6 +20,8 @@ Modes:
 
 import sys
 import time
+from pathlib import Path
+from ruamel.yaml import YAML
 
 from startupcan.config import (
     DEVICE_CONFIG,
@@ -28,6 +30,7 @@ from startupcan.config import (
     NEW_DEFAULT_MODE,
     DEFAULT_CMD_ID,
     DEFAULT_ANS_ID,
+    CONFIG_PATH
 )
 from startupcan.gsv86can import (
     GSV86CAN,
@@ -145,6 +148,78 @@ def _print_summary(rows: list[dict]):
         )
     print("=" * 80 + "\n")
 
+def _hex_str(x: int) -> str:
+    return f"0x{x:X}"
+
+def _all_ok(results: list[dict], expected: int) -> bool:
+    return (len(results) == expected) and all(bool(r.get("ok")) for r in results)
+
+def _current_ids_from_results(results: list[dict]) -> list[dict]:
+    out = []
+    for r in results:
+        out.append({
+            "dev_no": int(r["dev_no"]),
+            "cmd_id": int(r["cmd_new"]),
+            "answer_id": int(r["ans_new"]),
+        })
+    out.sort(key=lambda d: d["dev_no"])
+    return out
+
+def _write_updated_yaml(
+    src_path: Path,
+    dst_path: Path,
+    current_default: bool,
+    current_ids: list[dict],
+    make_new_safe: bool = True,
+):
+    """
+    Schreibt eine neue YAML, in der devices.config.current.* auf den Ist-Zustand gesetzt wird.
+
+    ruamel.yaml = Round-Trip:
+    - Kommentare bleiben erhalten
+    - Formatierung bleibt erhalten
+    - Reihenfolge bleibt erhalten
+    """
+
+    y = YAML()
+    y.preserve_quotes = True
+    y.indent(mapping=2, sequence=4, offset=2)  # schön lesbar
+
+    with open(src_path, "r", encoding="utf-8") as f:
+        cfg = y.load(f) or {}
+
+    devices = cfg.setdefault("devices", {})
+    config = devices.setdefault("config", {})
+    current = config.setdefault("current", {})
+    new = config.setdefault("new", {})
+
+    # current aktualisieren
+    current["default"] = bool(current_default)
+    current["ids"] = [
+        {
+            "dev_no": int(d["dev_no"]),
+            "cmd_id": _hex_str(int(d["cmd_id"])),
+            "answer_id": _hex_str(int(d["answer_id"])),
+        }
+        for d in current_ids
+    ]
+
+    # Optional: new "safe" machen – aber ohne verbotene Kombination zu erzeugen!
+    # Du willst meist verhindern, dass ein Run direkt nochmal "umstellt".
+    if make_new_safe:
+        # Wenn current.default=true wäre, darf new.default NICHT true werden (laut deiner Regel).
+        # Daher: in wizard-artigen Fällen new.default auf false und ids leeren.
+        if bool(current["default"]) is True:
+            new["default"] = False
+            new["ids"] = []
+        else:
+            # current.default=false: new.default=true ist erlaubt (Reset-Ziel),
+            # aber ids=[] passt dazu.
+            new["default"] = True
+            new["ids"] = []
+
+    with open(dst_path, "w", encoding="utf-8") as f:
+        y.dump(cfg, f)
 
 def main() -> int:
     gsv = GSV86CAN()
@@ -246,6 +321,25 @@ def main() -> int:
                     break
 
             _print_summary(results)
+            expected = len(DEVICE_CONFIG)
+            if _all_ok(results, expected):
+                current_ids = _current_ids_from_results(results)
+                # Nach dem Run sind die Geräte auf "cmd_new/ans_new"
+                # current.default ist TRUE nur wenn Ziel Default war (new.default=true)
+                current_default = bool(NEW_DEFAULT_MODE)
+
+                dst = Path(CONFIG_PATH).with_name("config.updated.yaml")
+                _write_updated_yaml(
+                    src_path=Path(CONFIG_PATH),
+                    dst_path=dst,
+                    current_default=current_default,
+                    current_ids=current_ids,
+                    make_new_safe=True,
+                )
+                print(f"[INFO] ✅ Updated YAML geschrieben: {dst}")
+            else:
+                print("[INFO] Updated YAML NICHT geschrieben (nicht alle Devices erfolgreich).")
+
             print("[INFO] Wenn alle Geräte umgestellt sind, dürfen alle gleichzeitig an den Bus.")
             return 0
 
@@ -294,6 +388,23 @@ def main() -> int:
                 print("-" * 80)
 
             _print_summary(results)
+            expected = len(DEVICE_CONFIG)
+            if _all_ok(results, expected):
+                current_ids = _current_ids_from_results(results)
+                current_default = bool(NEW_DEFAULT_MODE)
+
+                dst = Path(CONFIG_PATH).with_name("config.updated.yaml")
+                _write_updated_yaml(
+                    src_path=Path(CONFIG_PATH),
+                    dst_path=dst,
+                    current_default=current_default,
+                    current_ids=current_ids,
+                    make_new_safe=True,
+                )
+                print(f"[INFO] ✅ Updated YAML geschrieben: {dst}")
+            else:
+                print("[INFO] Updated YAML NICHT geschrieben (nicht alle Devices erfolgreich).")
+
             if NEW_DEFAULT_MODE:
                 print("⚠️  HINWEIS: Geräte wurden auf Default IDs gesetzt.")
                 print("   => NICHT gleichzeitig am Bus betreiben/aktivieren (Kollisionen).")

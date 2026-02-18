@@ -133,15 +133,61 @@ def load_config(path: Path) -> dict:
             })
         return out
     
+    def _assert_unique_can_fields(name: str, items: list[dict], *, strict_numbers: bool = True):
+        """
+        strict_numbers=True:
+        - keine einzelne Zahl (cmd oder ans) darf doppelt vorkommen (cmd-cmd, ans-ans, cmd-ans)
+        strict_numbers=False:
+        - erlaubt doppelte Zahlen (z.B. Default IDs in Wizard-Mode),
+            prüft aber weiterhin: cmd_id != answer_id pro Gerät
+        """
+
+        numbers: list[int] = []
+
+        for d in (items or []):
+            cmd = int(d["cmd_id"])
+            ans = int(d["answer_id"])
+
+            # 1) pro Gerät: cmd != ans
+            if cmd == ans:
+                raise ValueError(
+                    f"{name}: cmd_id und answer_id dürfen nicht gleich sein "
+                    f"(dev_no={d.get('dev_no','?')} ID=0x{cmd:X} / {cmd})."
+                )
+
+            numbers.append(cmd)
+            numbers.append(ans)
+
+        if strict_numbers:
+            # 2) keine Zahl darf doppelt vorkommen
+            if len(numbers) != len(set(numbers)):
+                # Duplikat ermitteln
+                dup = next(x for x in numbers if numbers.count(x) > 1)
+                raise ValueError(
+                    f"{name}: CAN-ID 0x{dup:X} ({dup}) kommt mehrfach vor "
+                    "(weder cmd noch ans darf irgendwo doppelt sein)."
+                )
+    
     device_current = _norm_list(current_block.get("ids", []))
     device_new_raw = _norm_list(new_block.get("ids", []))
+
+    if device_current:
+        _assert_unique_can_fields(
+            "devices.config.current.ids",
+            device_current,
+            strict_numbers=not current_default_mode,  # <-- WICHTIG
+        )
+
+    if device_new_raw:
+        _assert_unique_can_fields(
+            "devices.config.new.ids",
+            device_new_raw,
+            strict_numbers=not new_default_mode,      # <-- WICHTIG
+        )
 
     # -------------------------------------------------------------------------
     # Allowed mode combinations
     # -------------------------------------------------------------------------
-    
-    def _id_pairs(items: list[dict]) -> set[tuple[int, int]]:
-        return {(int(d["cmd_id"]), int(d["answer_id"])) for d in (items or [])}
     
     def _id_numbers(items: list[dict]) -> set[int]:
         s: set[int] = set()
@@ -149,8 +195,7 @@ def load_config(path: Path) -> dict:
             s.add(int(d["cmd_id"]))
             s.add(int(d["answer_id"]))
         return s
-
-    DEFAULT_PAIR = (int(default_cmd_id), int(default_ans_id))
+    
     # Forbidden combo
     if current_default_mode and new_default_mode:
         raise ValueError(
@@ -280,7 +325,7 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 PROJECT_ROOT = _project_root()
-CONFIG_PATH = PROJECT_ROOT / "config.yaml"
+CONFIG_PATH = PROJECT_ROOT / "config.updated.yaml"
 
 if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
     # PyInstaller onefile extracts binaries here at runtime.
