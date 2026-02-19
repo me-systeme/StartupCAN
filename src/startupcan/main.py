@@ -162,20 +162,25 @@ def _set_ids_reset_reactivate_verify_release(
         # wenn SN vorher unbekannt war, jetzt übernehmen
         serial = serial if serial is not None else sn2
 
-        _verify_ids(gsv, dev_no, serial, cmd_new, ans_new)
+        ok_verify = _verify_ids(gsv, dev_no, serial, cmd_new, ans_new)
+
+        if not ok_verify:
+            print(f"[{_fmt_dev(dev_no, serial)}] WARN: Verify nach Re-Activate stimmt nicht "
+                  f"(expected CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)}).")
 
         # Wichtig: wieder lösen (du willst danach nichts mehr damit machen)
         gsv.release(dev_no)
         time.sleep(0.1)
 
-        return True, serial
+        return ok_verify, serial
+    
     except Exception as e:
         print(f"[{_fmt_dev(dev_no, serial)}] set/reset/reactivate/verify/release FAIL: {e}")
         try:
             gsv.release(dev_no)
         except Exception:
             pass
-        return False
+        return False, serial
     
 def _print_summary(rows: list[dict]):
     print("\n" + "=" * 80)
@@ -204,19 +209,47 @@ def _hex_str(x: int) -> str:
 def _all_ok(results: list[dict], expected: int) -> bool:
     return (len(results) == expected) and all(bool(r.get("ok")) for r in results)
 
-def _current_ids_from_results(results: list[dict]) -> list[dict]:
+def _all_fail(results: list[dict], expected: int) -> bool:
+    return (len(results) == expected) and all(not bool(r.get("ok")) for r in results)
+
+def _effective_current_ids_from_results(results: list[dict]) -> list[dict]:
+    """
+    Baut devices.config.current.ids so, dass es den IST-Zustand abbildet:
+    - ok=True  => cmd_new/ans_new
+    - ok=False => cmd_old/ans_old (Gerät wurde übersprungen/failed)
+    """
     out = []
     for r in results:
+        ok = bool(r.get("ok"))
         item = {
             "dev_no": int(r["dev_no"]),
-            "cmd_id": int(r["cmd_new"]),
-            "answer_id": int(r["ans_new"]),
+            "cmd_id": int(r["cmd_new"] if ok else r["cmd_old"]),
+            "answer_id": int(r["ans_new"] if ok else r["ans_old"]),
         }
         if r.get("serial") is not None:
             item["serial"] = int(r["serial"])
         out.append(item)
     out.sort(key=lambda d: d["dev_no"])
     return out
+
+
+def _finish_device_step(gsv: GSV86CAN, dev_no: int, serial: int | None, reason: str = ""):
+    """
+    Best-effort: Session freigeben und den User auffordern, GENAU dieses Gerät abzunehmen.
+    """
+    tag = _fmt_dev(dev_no, serial)
+    if reason:
+        print(f"[{tag}] {reason}")
+
+    # best-effort release (nicht hart failen)
+    try:
+        gsv.release(dev_no)
+        time.sleep(0.1)
+    except Exception:
+        pass
+
+    _pause(f"➡️  Bitte dieses Gerät {tag} JETZT vom Bus abnehmen/abschrauben, dann ENTER ...")
+
 
 def _write_updated_yaml(
     src_path: Path,
@@ -261,16 +294,8 @@ def _write_updated_yaml(
     # Optional: new "safe" machen – aber ohne verbotene Kombination zu erzeugen!
     # Du willst meist verhindern, dass ein Run direkt nochmal "umstellt".
     if make_new_safe:
-        # Wenn current.default=true wäre, darf new.default NICHT true werden (laut deiner Regel).
-        # Daher: in wizard-artigen Fällen new.default auf false und ids leeren.
-        if bool(current["default"]) is True:
-            new["default"] = False
-            new["ids"] = []
-        else:
-            # current.default=false: new.default=true ist erlaubt (Reset-Ziel),
-            # aber ids=[] passt dazu.
-            new["default"] = True
-            new["ids"] = []
+        new["default"] = False
+        new["ids"] = []
 
     with open(dst_path, "w", encoding="utf-8") as f:
         y.dump(cfg, f)
@@ -337,19 +362,24 @@ def main() -> int:
                 ok, sn = _activate(gsv, dev_no, DEFAULT_CMD_ID, DEFAULT_ANS_ID)
 
                 if not ok:
+                    # SN ist hier meistens None, aber wenn _activate SN gelesen hat, steht sie drin
                     results.append({
                         "dev_no": dev_no,
                         "serial": sn,
                         "ok": False,
                         "cmd_old": DEFAULT_CMD_ID,
                         "ans_old": DEFAULT_ANS_ID,
+                        "cmd_new": DEFAULT_CMD_ID,
+                        "ans_new": DEFAULT_ANS_ID,
                     })
-                    retry = input("[WIZARD] Nochmal versuchen? [j/N]: ").strip().lower()
-                    if retry in ("j", "ja", "y", "yes"):
-                        continue
-                    else:
-                        _print_summary(results)
-                        return 2
+
+                    _finish_device_step(
+                        gsv, dev_no, sn,
+                        reason="FEHLER: Aktivierung fehlgeschlagen. Dieses Gerät wird übersprungen."
+                    )
+
+                    # weiter mit nächstem DEV in DEVICE_CONFIG
+                    continue
                 
                 # Ziel bestimmen: per Serial (wenn new.ids Serials enthält), sonst per dev_no
                 if sn is not None and _has_serials(DEVICE_NEW):
@@ -358,13 +388,21 @@ def main() -> int:
                         print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs aus new.ids per SN match.")
                     except KeyError:
                         print(f"[{_fmt_dev(dev_no, sn)}] FEHLER: SN nicht in new.ids gefunden.")
+
                         results.append({
                             "dev_no": dev_no,
                             "serial": sn,
                             "ok": False,
                             "cmd_old": DEFAULT_CMD_ID,
                             "ans_old": DEFAULT_ANS_ID,
+                            "cmd_new": DEFAULT_CMD_ID,
+                            "ans_new": DEFAULT_ANS_ID,
                         })
+
+                        _finish_device_step(
+                            gsv, dev_no, sn,
+                            reason="FEHLER: Keine Ziel-IDs für diese Seriennummer. Dieses Gerät wird übersprungen."
+                        )
                         continue
                 else:
                     cmd_new, ans_new = _new_ids_for(dev_no)
@@ -383,33 +421,43 @@ def main() -> int:
                 })
 
                 if ok2:
-                    print(f"[WIZARD] ✅ {_fmt_dev(dev_no, sn2)} umgestellt. Du kannst dieses Gerät jetzt angeschlossen lassen.")
+                    print(f"[WIZARD] ✅ {_fmt_dev(dev_no, sn2)} umgestellt. Du kannst dieses Gerät jetzt angeschlossen lassen. (Session wird geschlossen).")
                 else:
+                    # bei Fail willst du ziemlich sicher: Gerät abnehmen (weil Zustand unklar / evtl Default)
+                    _finish_device_step(
+                        gsv, dev_no, sn2 if sn2 is not None else sn,
+                        reason="FEHLER: Umstellung fehlgeschlagen."
+                    )
                     print(f"[WIZARD] ❌ {_fmt_dev(dev_no, sn2)} Umstellung fehlgeschlagen.")
+                    continue
 
                 more = input("[WIZARD] Nächstes Gerät umstellen? [j/N]: ").strip().lower()
                 if more not in ("j", "ja", "y", "yes"):
                     break
 
             _print_summary(results)
-            expected = len(DEVICE_CONFIG)
-            if _all_ok(results, expected):
-                current_ids = _current_ids_from_results(results)
-                # Nach dem Run sind die Geräte auf "cmd_new/ans_new"
-                # current.default ist TRUE nur wenn Ziel Default war (new.default=true)
-                current_default = bool(NEW_DEFAULT_MODE)
+            current_ids = _effective_current_ids_from_results(results)
+            current_default = _all_fail(results, len(DEVICE_CONFIG)) 
 
-                dst = Path(CONFIG_PATH).with_name("config.updated.yaml")
-                _write_updated_yaml(
-                    src_path=Path(CONFIG_PATH),
-                    dst_path=dst,
-                    current_default=current_default,
-                    current_ids=current_ids,
-                    make_new_safe=True,
-                )
-                print(f"[INFO] ✅ Updated YAML geschrieben: {dst}")
+            dst = Path(CONFIG_PATH).with_name("config.updated.yaml")
+            _write_updated_yaml(
+                src_path=Path(CONFIG_PATH),
+                dst_path=dst,
+                current_default=current_default,
+                current_ids=current_ids,
+                make_new_safe=True,
+            )
+            print(f"[INFO] ✅ Updated YAML geschrieben: {dst}")
+
+            if _all_ok(results, len(DEVICE_CONFIG)):
+                print("[INFO] Alle Geräte umgestellt ⇒ dürfen jetzt gleichzeitig an den Bus (IDs eindeutig).")
             else:
-                print("[INFO] Updated YAML NICHT geschrieben (nicht alle Devices erfolgreich).")
+                print("[WARN] Nicht alle Geräte umgestellt ⇒ erst config.updated.yaml prüfen, bevor alle gleichzeitig an den Bus.")
+
+            if current_default:
+                print("[INFO] Kein Gerät wurde umgestellt: current.default bleibt TRUE (alle weiterhin DEFAULT).")
+            
+
 
             print("[INFO] Wenn alle Geräte umgestellt sind, dürfen alle gleichzeitig an den Bus.")
             return 0
@@ -449,28 +497,55 @@ def main() -> int:
                     print("-" * 80)
                     continue
                 
-                # Wenn current.ids serial angibt: muss matchen
-                if expected_sn is not None and sn is not None and int(expected_sn) != int(sn):
-                    print(f"[{_fmt_dev(dev_no, sn)}] FEHLER: Seriennummer passt nicht zu YAML current.ids "
-                        f"(yaml SN={expected_sn}). => Device wird NICHT umgestellt.")
-                    results.append({
-                        "dev_no": dev_no,
-                        "serial": sn,
-                        "ok": False,
-                        "cmd_old": cmd_id,
-                        "ans_old": ans_id,
-                        "cmd_new": cmd_new,
-                        "ans_new": ans_new,
-                    })
-                    try:
-                        gsv.release(dev_no)
-                    except Exception:
-                        pass
-                    print("-" * 80)
-                    continue
+                # Wenn current.ids serial angibt: muss matchen (und muss lesbar sein)
+                if expected_sn is not None:
+                    if sn is None:
+                        print(
+                            f"[DEV {dev_no}] FEHLER: YAML erwartet SN={expected_sn}, "
+                            "aber Seriennummer konnte nicht gelesen werden. => Device wird NICHT umgestellt."
+                        )
+                        results.append({
+                            "dev_no": dev_no,
+                            "serial": sn,
+                            "ok": False,
+                            "cmd_old": cmd_start,
+                            "ans_old": ans_start,
+                            "cmd_new": cmd_new,
+                            "ans_new": ans_new,
+                        })
+                        try:
+                            gsv.release(dev_no)
+                        except Exception:
+                            pass
+                        print("-" * 80)
+                        continue
+
+                    if int(expected_sn) != int(sn):
+                        print(
+                            f"[{_fmt_dev(dev_no, sn)}] FEHLER: Seriennummer passt nicht zu YAML current.ids "
+                            f"(yaml SN={expected_sn}). => Device wird NICHT umgestellt."
+                        )
+                        results.append({
+                            "dev_no": dev_no,
+                            "serial": sn,
+                            "ok": False,
+                            "cmd_old": cmd_start,
+                            "ans_old": ans_start,
+                            "cmd_new": cmd_new,
+                            "ans_new": ans_new,
+                        })
+                        try:
+                            gsv.release(dev_no)
+                        except Exception:
+                            pass
+                        print("-" * 80)
+                        continue
 
                 # optional: verify start
-                _verify_ids(gsv, dev_no, sn, cmd_start, ans_start)
+                ok = _verify_ids(gsv, dev_no, sn, cmd_start, ans_start)
+
+                if not ok:
+                    print(f"[{_fmt_dev(dev_no, sn)}] WARN: Start-IDs stimmen nicht (trotz activation).")
 
                 # 2-5) set default, reset, release, reactivate default, verify, release
                 ok2, sn2 = _set_ids_reset_reactivate_verify_release(gsv, dev_no, sn, cmd_new, ans_new)
@@ -491,26 +566,28 @@ def main() -> int:
                 _pause(f"➡️  Bitte dieses Gerät {_fmt_dev(dev_no, sn2)} JETZT vom Bus abnehmen/abschrauben, dann ENTER ...")
 
             _print_summary(results)
-            # Nach Reset auf Default: current_default = True (Geräte sind default)
-            # YAML schreiben wie gehabt (current.ids = DEFAULT für alle erfolgreichen)
-            expected = len(DEVICE_CONFIG)
-            if _all_ok(results, expected):
-                current_ids = _current_ids_from_results(results)
-                current_default = True  # nach reset sind sie default
-                dst = Path(CONFIG_PATH).with_name("config.updated.yaml")
-                _write_updated_yaml(
-                    src_path=Path(CONFIG_PATH),
-                    dst_path=dst,
-                    current_default=current_default,
-                    current_ids=current_ids,
-                    make_new_safe=True,
-                )
-                print(f"[INFO] ✅ Updated YAML geschrieben: {dst}")
-            else:
-                print("[INFO] Updated YAML NICHT geschrieben (nicht alle Devices erfolgreich).")
+            current_ids = _effective_current_ids_from_results(results)
+            current_default = _all_ok(results, len(DEVICE_CONFIG))  # nur wenn ALLE wirklich default sind
 
-            print("⚠️  HINWEIS: Geräte sind jetzt auf DEFAULT IDs.")
-            print("   => NICHT gleichzeitig am Bus betreiben/aktivieren.")
+            dst = Path(CONFIG_PATH).with_name("config.updated.yaml")
+            _write_updated_yaml(
+                src_path=Path(CONFIG_PATH),
+                dst_path=dst,
+                current_default=current_default,
+                current_ids=current_ids,
+                make_new_safe=True,
+            )
+            print(f"[INFO] ✅ Updated YAML geschrieben: {dst}")
+
+            if not current_default:
+                print("[WARN] Nicht alle Geräte wurden auf DEFAULT gesetzt. current.default bleibt FALSE.")
+
+            if current_default:
+                print("⚠️  HINWEIS: Geräte sind jetzt auf DEFAULT IDs.")
+                print("   => NICHT gleichzeitig am Bus betreiben/aktivieren.")
+            else:
+                print("⚠️  HINWEIS: NICHT alle Geräte sind DEFAULT. (Gemischter Zustand möglich.)")
+                print("   => Bus-Betrieb nur mit den IDs aus config.updated.yaml!")
             return 0
 
         # -------------------------------------------------------------------
@@ -542,28 +619,54 @@ def main() -> int:
                     print("-" * 80)
                     continue
                 
-                # Wenn current.ids serial angibt: muss matchen
-                if expected_sn is not None and sn is not None and int(expected_sn) != int(sn):
-                    print(f"[{_fmt_dev(dev_no, sn)}] FEHLER: Seriennummer passt nicht zu YAML current.ids "
-                        f"(yaml SN={expected_sn}). => Device wird NICHT umgestellt.")
-                    results.append({
-                        "dev_no": dev_no,
-                        "serial": sn,
-                        "ok": False,
-                        "cmd_old": cmd_id,
-                        "ans_old": ans_id,
-                        "cmd_new": cmd_new,
-                        "ans_new": ans_new,
-                    })
-                    try:
-                        gsv.release(dev_no)
-                    except Exception:
-                        pass
-                    print("-" * 80)
-                    continue
+                if expected_sn is not None:
+                    if sn is None:
+                        print(
+                            f"[DEV {dev_no}] FEHLER: YAML erwartet SN={expected_sn}, "
+                            "aber Seriennummer konnte nicht gelesen werden. => Device wird NICHT umgestellt."
+                        )
+                        results.append({
+                            "dev_no": dev_no,
+                            "serial": sn,
+                            "ok": False,
+                            "cmd_old": cmd_id,
+                            "ans_old": ans_id,
+                            "cmd_new": cmd_new,
+                            "ans_new": ans_new,
+                        })
+                        try:
+                            gsv.release(dev_no)
+                        except Exception:
+                            pass
+                        print("-" * 80)
+                        continue
+
+                    if int(expected_sn) != int(sn):
+                        print(
+                            f"[{_fmt_dev(dev_no, sn)}] FEHLER: Seriennummer passt nicht zu YAML current.ids "
+                            f"(yaml SN={expected_sn}). => Device wird NICHT umgestellt."
+                        )
+                        results.append({
+                            "dev_no": dev_no,
+                            "serial": sn,
+                            "ok": False,
+                            "cmd_old": cmd_id,
+                            "ans_old": ans_id,
+                            "cmd_new": cmd_new,
+                            "ans_new": ans_new,
+                        })
+                        try:
+                            gsv.release(dev_no)
+                        except Exception:
+                            pass
+                        print("-" * 80)
+                        continue
 
                 # Optional: prüfen
-                _verify_ids(gsv, dev_no, sn, cmd_id, ans_id)
+                ok = _verify_ids(gsv, dev_no, sn, cmd_id, ans_id)
+
+                if not ok:
+                    print(f"[{_fmt_dev(dev_no, sn)}] WARN: Start-IDs stimmen nicht (trotz activation).")
 
                 ok2, sn2 = _set_ids_reset_reactivate_verify_release(gsv, dev_no, sn, cmd_new, ans_new)
 
@@ -579,22 +682,21 @@ def main() -> int:
                 print("-" * 80)
 
             _print_summary(results)
-            expected = len(DEVICE_CONFIG)
-            if _all_ok(results, expected):
-                current_ids = _current_ids_from_results(results)
-                current_default = bool(NEW_DEFAULT_MODE)
+            current_ids = _effective_current_ids_from_results(results)
+            current_default = False
 
-                dst = Path(CONFIG_PATH).with_name("config.updated.yaml")
-                _write_updated_yaml(
-                    src_path=Path(CONFIG_PATH),
-                    dst_path=dst,
-                    current_default=current_default,
-                    current_ids=current_ids,
-                    make_new_safe=True,
-                )
-                print(f"[INFO] ✅ Updated YAML geschrieben: {dst}")
-            else:
-                print("[INFO] Updated YAML NICHT geschrieben (nicht alle Devices erfolgreich).")
+            dst = Path(CONFIG_PATH).with_name("config.updated.yaml")
+            _write_updated_yaml(
+                src_path=Path(CONFIG_PATH),
+                dst_path=dst,
+                current_default=current_default,
+                current_ids=current_ids,
+                make_new_safe=True,
+            )
+            print(f"[INFO] ✅ Updated YAML geschrieben: {dst}")
+            
+            if not _all_ok(results, len(DEVICE_CONFIG)):
+                print("[WARN] Nicht alle Devices erfolgreich. YAML enthält Ist-Stand (teils alte IDs).")
 
             print("\n[INFO] new.default=false: Geräte dürfen gleichzeitig am Bus sein (IDs eindeutig).")
             return 0 
