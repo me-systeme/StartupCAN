@@ -126,11 +126,16 @@ def load_config(path: Path) -> dict:
     def _norm_list(lst):
         out = []
         for d in (lst or []):
-            out.append({
+            item = {
                 "dev_no": int(d["dev_no"]),
                 "cmd_id": _parse_hex(d["cmd_id"]),
                 "answer_id": _parse_hex(d["answer_id"]),
-            })
+            }
+            # serial ist OPTIONAL
+            if "serial" in d and d["serial"] is not None:
+                # erlaubt int oder string
+                item["serial"] = int(str(d["serial"]).strip())
+            out.append(item)
         return out
     
     def _assert_unique_can_fields(name: str, items: list[dict], *, strict_numbers: bool = True):
