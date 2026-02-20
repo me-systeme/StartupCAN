@@ -119,6 +119,12 @@ def load_config(path: Path) -> dict:
     default_cmd_id = _parse_hex(assign.get("default_cmd_id", "0x100"))
     default_ans_id = _parse_hex(assign.get("default_ans_id", "0x101"))
 
+    if int(default_cmd_id) == int(default_ans_id):
+        raise ValueError(
+            "devices.config.assign: default_cmd_id und default_ans_id dürfen nicht gleich sein "
+            f"(ID=0x{int(default_cmd_id):X})."
+        )
+
     # current/new blocks (new YAML structure)
     current_block = cfg_block.get("current", {}) or {}
     new_block = cfg_block.get("new", {}) or {}
