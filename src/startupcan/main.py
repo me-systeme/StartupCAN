@@ -28,6 +28,7 @@ from startupcan.config import (
     DEVICE_NEW,
     CURRENT_DEFAULT_MODE,
     NEW_DEFAULT_MODE,
+    SN_MODE,
     DEFAULT_CMD_ID,
     DEFAULT_ANS_ID,
     CONFIG_PATH
@@ -57,6 +58,18 @@ def fmt_can_id(x: int) -> str:
     if x <= 0x7FF:
         return f"0x{x:03X}"
     return f"0x{x:X}"
+
+def _target_ids(dev_no: int, serial: int | None) -> tuple[int, int]:
+    """
+    Liefert Ziel-IDs aus DEVICE_NEW.
+    - SN_MODE=True  => mapping per serial (muss lesbar sein)
+    - SN_MODE=False => mapping per dev_no
+    """
+    if SN_MODE:
+        if serial is None:
+            raise KeyError(f"SN_MODE aktiv, aber Seriennummer konnte nicht gelesen werden (dev_no={dev_no}).")
+        return _new_ids_for_serial(serial)
+    return _new_ids_for(dev_no)
 
 def _new_ids_for(dev_no: int) -> tuple[int, int]:
     for d in DEVICE_NEW:
@@ -91,10 +104,6 @@ def _new_ids_for_serial(serial: int) -> tuple[int, int]:
         if "serial" in d and int(d["serial"]) == int(serial):
             return int(d["cmd_id"]), int(d["answer_id"])
     raise KeyError(f"Keine new.ids Zuordnung für SN={serial} gefunden")
-
-
-def _has_serials(items: list[dict]) -> bool:
-    return any(("serial" in d and d["serial"] is not None) for d in (items or []))
 
 
 def _verify_ids(gsv: GSV86CAN, dev_no: int, serial: int | None, exp_cmd: int, exp_ans: int):
@@ -381,32 +390,30 @@ def main() -> int:
                     # weiter mit nächstem DEV in DEVICE_CONFIG
                     continue
                 
-                # Ziel bestimmen: per Serial (wenn new.ids Serials enthält), sonst per dev_no
-                if sn is not None and _has_serials(DEVICE_NEW):
-                    try:
-                        cmd_new, ans_new = _new_ids_for_serial(sn)
-                        print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs aus new.ids per SN match.")
-                    except KeyError:
-                        print(f"[{_fmt_dev(dev_no, sn)}] FEHLER: SN nicht in new.ids gefunden.")
+                try:
+                    cmd_new, ans_new = _target_ids(dev_no, sn)
+                    if SN_MODE:
+                        print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs per SN-Mapping.")
+                    else:
+                        print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs per dev_no-Mapping.")
+                except KeyError as e:
+                    print(f"[{_fmt_dev(dev_no, sn)}] FEHLER: {e}")
 
-                        results.append({
-                            "dev_no": dev_no,
-                            "serial": sn,
-                            "ok": False,
-                            "cmd_old": DEFAULT_CMD_ID,
-                            "ans_old": DEFAULT_ANS_ID,
-                            "cmd_new": DEFAULT_CMD_ID,
-                            "ans_new": DEFAULT_ANS_ID,
-                        })
+                    results.append({
+                        "dev_no": dev_no,
+                        "serial": sn,
+                        "ok": False,
+                        "cmd_old": DEFAULT_CMD_ID,
+                        "ans_old": DEFAULT_ANS_ID,
+                        "cmd_new": DEFAULT_CMD_ID,
+                        "ans_new": DEFAULT_ANS_ID,
+                    })
 
-                        _finish_device_step(
-                            gsv, dev_no, sn,
-                            reason="FEHLER: Keine Ziel-IDs für diese Seriennummer. Dieses Gerät wird übersprungen."
-                        )
-                        continue
-                else:
-                    cmd_new, ans_new = _new_ids_for(dev_no)
-                    print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs per dev_no (Fallback, keine Serials in new.ids).")
+                    _finish_device_step(
+                        gsv, dev_no, sn,
+                        reason="FEHLER: Ziel-IDs konnten nicht bestimmt werden. Dieses Gerät wird übersprungen."
+                    )
+                    continue
             
                 ok2, sn2 = _set_ids_reset_reactivate_verify_release(gsv, dev_no, sn, cmd_new, ans_new)
 

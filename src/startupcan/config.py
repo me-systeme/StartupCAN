@@ -173,8 +173,63 @@ def load_config(path: Path) -> dict:
                     "(weder cmd noch ans darf irgendwo doppelt sein)."
                 )
     
+    def _assert_unique_dev_no(name: str, items: list[dict]):
+        dev_nos = [int(d["dev_no"]) for d in (items or [])]
+        if len(dev_nos) != len(set(dev_nos)):
+            dup = next(n for n in dev_nos if dev_nos.count(n) > 1)
+            raise ValueError(f"{name}: dev_no={dup} kommt mehrfach vor.")
+    
     device_current = _norm_list(current_block.get("ids", []))
     device_new_raw = _norm_list(new_block.get("ids", []))
+
+    # dev_no muss eindeutig sein
+    if device_current:
+        _assert_unique_dev_no("devices.config.current.ids", device_current)
+    if device_new_raw:
+        _assert_unique_dev_no("devices.config.new.ids", device_new_raw)
+
+    # -------------------------------------------------------------------------
+    # Serial-number mode (2 Modi, kein Mischbetrieb erlaubt)
+    # -------------------------------------------------------------------------
+    def _detect_and_validate_sn_mode(new_ids: list[dict]) -> bool:
+        """
+        Zwei Modi:
+        - SN_MODE=False: KEIN Eintrag in new.ids hat 'serial'
+        - SN_MODE=True : ALLE Einträge in new.ids haben 'serial' (und unique)
+
+        Mischbetrieb (einige mit serial, einige ohne) -> ValueError sofort.
+        """
+        if not new_ids:
+            return False  # egal, wird später je nach Case geprüft
+
+        has_any = any(("serial" in d and d["serial"] is not None) for d in new_ids)
+        if not has_any:
+            return False
+
+        missing = [d.get("dev_no") for d in new_ids if ("serial" not in d or d["serial"] is None)]
+        if missing:
+            raise ValueError(
+                "devices.config.new.ids: SN-Modus aktiv (mindestens ein Eintrag hat 'serial'), "
+                f"aber bei folgenden dev_no fehlt 'serial': {missing}. "
+                "Entweder: bei ALLEN new.ids Einträgen 'serial' setzen oder bei KEINEM."
+            )
+
+        serials = []
+        for d in new_ids:
+            s = int(d["serial"])
+            if s <= 0:
+                raise ValueError(f"devices.config.new.ids: ungültige serial {s} (dev_no={d.get('dev_no')})")
+            serials.append(s)
+
+        dup = sorted({s for s in serials if serials.count(s) > 1})
+        if dup:
+            raise ValueError(
+                f"devices.config.new.ids: Seriennummer(n) kommen mehrfach vor: {dup}"
+            )
+
+        return True
+
+    SN_MODE = _detect_and_validate_sn_mode(device_new_raw)
 
     if device_current:
         _assert_unique_can_fields(
@@ -319,6 +374,7 @@ def load_config(path: Path) -> dict:
         "CANBAUD": canbaud,
         "CURRENT_DEFAULT_MODE": current_default_mode,
         "NEW_DEFAULT_MODE": new_default_mode,
+        "SN_MODE": SN_MODE,
         "DEVICE_CONFIG": device_config,
         "DEVICE_CURRENT": device_current,   # optional
         "DEVICE_NEW": device_new,           # Ziel-IDs
@@ -364,6 +420,7 @@ CANBAUD = CONFIG["CANBAUD"]
 
 CURRENT_DEFAULT_MODE = CONFIG["CURRENT_DEFAULT_MODE"]
 NEW_DEFAULT_MODE = CONFIG["NEW_DEFAULT_MODE"]
+SN_MODE = CONFIG["SN_MODE"]
 DEVICE_CURRENT = CONFIG["DEVICE_CURRENT"]
 DEVICE_NEW = CONFIG["DEVICE_NEW"]
 ASSIGN = CONFIG["ASSIGN"]
