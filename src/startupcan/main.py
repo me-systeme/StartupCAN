@@ -31,7 +31,8 @@ from startupcan.config import (
     SN_MODE,
     DEFAULT_CMD_ID,
     DEFAULT_ANS_ID,
-    CONFIG_PATH
+    CONFIG_PATH,
+    IGNORE_NEW_SERIALS,
 )
 from startupcan.gsv86can import (
     GSV86CAN,
@@ -603,6 +604,10 @@ def main() -> int:
         else:
             print("\n[INFO] current.default=false: Geräte dürfen gleichzeitig am Bus sein (IDs eindeutig).")
             print("[INFO] new.default=false: Ziel-IDs aus devices.config.new.ids.\n")
+            if IGNORE_NEW_SERIALS:
+                print("[HINWEIS] devices.config.new.ids enthält 'serial' Einträge, "
+                    "aber in Case 1 wird IMMER per dev_no gemappt. "
+                    "Die Seriennummern in new.ids werden ignoriert.")
 
             for d in DEVICE_CONFIG:
                 dev_no = int(d["dev_no"])

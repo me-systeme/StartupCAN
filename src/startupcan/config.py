@@ -92,6 +92,7 @@ def load_config(path: Path) -> dict:
     """
 
     SN_MODE = False
+    IGNORE_NEW_SERIALS = False
     # -------------------------------------------------------------------------
     # Read YAML file
     # -------------------------------------------------------------------------
@@ -180,6 +181,9 @@ def load_config(path: Path) -> dict:
         if len(dev_nos) != len(set(dev_nos)):
             dup = next(n for n in dev_nos if dev_nos.count(n) > 1)
             raise ValueError(f"{name}: dev_no={dup} kommt mehrfach vor.")
+        
+    def _by_devno(items: list[dict]) -> dict[int, dict]:
+        return {int(d["dev_no"]): d for d in (items or [])}
     
     device_current = _norm_list(current_block.get("ids", []))
     device_new_raw = _norm_list(new_block.get("ids", []))
@@ -257,10 +261,20 @@ def load_config(path: Path) -> dict:
             s.add(int(d["answer_id"]))
         return s
     
-    def _assert_no_serials(name: str, items: list[dict]):
-        offenders = [d.get("dev_no") for d in (items or []) if ("serial" in d and d["serial"] is not None)]
-        if offenders:
-            raise ValueError(f"{name}: serial ist in diesem Modus nicht erlaubt. Es wird nur über dev_no gemappt. Betroffene dev_no: {offenders}")
+    def _has_serials(items: list[dict]) -> bool:
+        return any(("serial" in d and d["serial"] is not None) for d in (items or []))
+
+        
+    def _assert_same_dev_nos(name_a: str, a: list[dict], name_b: str, b: list[dict]):
+        sa = {int(d["dev_no"]) for d in (a or [])}
+        sb = {int(d["dev_no"]) for d in (b or [])}
+        if sa != sb:
+            only_a = sorted(sa - sb)
+            only_b = sorted(sb - sa)
+            raise ValueError(
+                f"{name_a} und {name_b} müssen die gleichen dev_no enthalten. "
+                f"Nur in {name_a}: {only_a} | Nur in {name_b}: {only_b}"
+            )
     
     # # -------------------------------------------------------------------------
     # # UNKNOWN MODE: current wird ignoriert, Ziel kommt aus new.ids
@@ -296,20 +310,42 @@ def load_config(path: Path) -> dict:
                 "current.default=false & new.default=false: current.ids und new.ids müssen gleich lang sein."
             )
         
-        _assert_no_serials("devices.config.new.ids", device_new_raw)
+        _assert_same_dev_nos(
+            "devices.config.current.ids", device_current,
+            "devices.config.new.ids", device_new_raw
+        )
+        
+        IGNORE_NEW_SERIALS = _has_serials(device_new_raw)
 
         SN_MODE = False
         
         current_nums = _id_numbers(device_current)
-        new_nums = _id_numbers(device_new_raw)
 
-        overlap_nums = current_nums & new_nums
+        cur_by = _by_devno(device_current)
+        new_by = _by_devno(device_new_raw)
+
+        # Nur IDs der Geräte betrachten, die sich WIRKLICH ändern sollen.
+        changed_new_nums: set[int] = set()
+        for dev_no, nd in new_by.items():
+            cd = cur_by.get(dev_no)
+            if cd is None:
+                # sollte durch _assert_same_dev_nos nie passieren, aber sauber bleiben
+                raise ValueError(f"devices.config.new.ids enthält dev_no={dev_no}, das in current.ids fehlt.")
+
+            if int(nd["cmd_id"]) != int(cd["cmd_id"]) or int(nd["answer_id"]) != int(cd["answer_id"]):
+                changed_new_nums.add(int(nd["cmd_id"]))
+                changed_new_nums.add(int(nd["answer_id"]))
+
+        # Wenn nichts geändert wird, ist das ok (no-op run).
+        overlap_nums = current_nums & changed_new_nums
         if overlap_nums:
             ex = next(iter(overlap_nums))
             raise ValueError(
-                "current.default=false & new.default=false: "
-                "Keine einzelne CAN-ID Zahl (weder cmd noch ans) aus new.ids darf in current.ids vorkommen "
-                f"(und umgekehrt). Beispiel Überschneidung: 0x{ex:X} ({ex})."
+                "current.default=false & new.default=false (Partial allowed): "
+                "Eine CAN-ID, die im current Bus bereits existiert, darf nicht als Ziel-ID "
+                "für ein GEÄNDERTES Gerät verwendet werden. "
+                f"Beispiel Überschneidung: 0x{ex:X} ({ex}). "
+                "Hinweis: No-op Einträge (new==current pro dev_no) sind erlaubt."
             )
 
         dev_nos_for_run = [d["dev_no"] for d in device_current]  # Quelle: current
@@ -352,6 +388,7 @@ def load_config(path: Path) -> dict:
     
     # Case 3: current=false, new=true
     else:  # (not current_default_mode) and new_default_mode
+        SN_MODE = False
         if not device_current:
             raise ValueError("current.default=false & new.default=true: devices.config.current.ids darf nicht leer sein.")
 
@@ -391,6 +428,7 @@ def load_config(path: Path) -> dict:
         "DEVICE_CURRENT": device_current,   # optional
         "DEVICE_NEW": device_new,           # Ziel-IDs
         "ASSIGN": {"DEFAULT_CMD_ID": default_cmd_id, "DEFAULT_ANS_ID": default_ans_id},
+        "IGNORE_NEW_SERIALS": bool(IGNORE_NEW_SERIALS),
     }
 
     
@@ -438,3 +476,4 @@ DEVICE_NEW = CONFIG["DEVICE_NEW"]
 ASSIGN = CONFIG["ASSIGN"]
 DEFAULT_CMD_ID = ASSIGN["DEFAULT_CMD_ID"]
 DEFAULT_ANS_ID = ASSIGN["DEFAULT_ANS_ID"]
+IGNORE_NEW_SERIALS = CONFIG["IGNORE_NEW_SERIALS"]
