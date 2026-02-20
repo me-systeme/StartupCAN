@@ -90,6 +90,8 @@ def load_config(path: Path) -> dict:
     ValueError
         If logging.rate_hz is provided but <= 0.
     """
+
+    SN_MODE = False
     # -------------------------------------------------------------------------
     # Read YAML file
     # -------------------------------------------------------------------------
@@ -229,7 +231,6 @@ def load_config(path: Path) -> dict:
 
         return True
 
-    SN_MODE = _detect_and_validate_sn_mode(device_new_raw)
 
     if device_current:
         _assert_unique_can_fields(
@@ -255,6 +256,11 @@ def load_config(path: Path) -> dict:
             s.add(int(d["cmd_id"]))
             s.add(int(d["answer_id"]))
         return s
+    
+    def _assert_no_serials(name: str, items: list[dict]):
+        offenders = [d.get("dev_no") for d in (items or []) if ("serial" in d and d["serial"] is not None)]
+        if offenders:
+            raise ValueError(f"{name}: serial ist in diesem Modus nicht erlaubt. Es wird nur über dev_no gemappt. Betroffene dev_no: {offenders}")
     
     # # -------------------------------------------------------------------------
     # # UNKNOWN MODE: current wird ignoriert, Ziel kommt aus new.ids
@@ -290,6 +296,10 @@ def load_config(path: Path) -> dict:
                 "current.default=false & new.default=false: current.ids und new.ids müssen gleich lang sein."
             )
         
+        _assert_no_serials("devices.config.new.ids", device_new_raw)
+
+        SN_MODE = False
+        
         current_nums = _id_numbers(device_current)
         new_nums = _id_numbers(device_new_raw)
 
@@ -312,6 +322,8 @@ def load_config(path: Path) -> dict:
     elif current_default_mode and (not new_default_mode):
         if not device_new_raw:
             raise ValueError("current.default=true & new.default=false: devices.config.new.ids darf nicht leer sein.")
+        
+        SN_MODE = _detect_and_validate_sn_mode(device_new_raw)
 
         dev_nos_for_run = [d["dev_no"] for d in device_new_raw]  # Quelle: new
         device_new = device_new_raw
