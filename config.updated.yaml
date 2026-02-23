@@ -15,21 +15,20 @@ devices:
       default_cmd_id: "0x100"
       default_ans_id: "0x101"
     current:
-      unknown: true
-      default: true
+      default: false
       ids:
         - dev_no: 1
           serial: 25455437
-          cmd_id: '0x100'
-          answer_id: '0x101'
+          cmd_id: '0x102'
+          answer_id: '0x103'
         - dev_no: 2
           serial: 25455423
-          cmd_id: '0x100'
-          answer_id: '0x101'
+          cmd_id: '0x104'
+          answer_id: '0x105'
         - dev_no: 3
           serial: 25455439
-          cmd_id: '0x100'
-          answer_id: '0x101'
+          cmd_id: '0x106'
+          answer_id: '0x107'
     new:
       default: false
       ids: []

@@ -230,14 +230,28 @@ def _effective_current_ids_from_results(results: list[dict]) -> list[dict]:
     """
     out = []
     for r in results:
-        ok = bool(r.get("ok"))
+        state = r.get("state")  # "old"|"new"|"unknown"|None
+
+        if state == "new":
+            cmd_eff, ans_eff = r["cmd_new"], r["ans_new"]
+        elif state == "old":
+            cmd_eff, ans_eff = r["cmd_old"], r["ans_old"]
+        else:
+            # unknown: du kannst entweder old drin lassen (aber markieren)
+            # oder bewusst new drin lassen, weil das Ziel war.
+            # Ich würde: old drin lassen + unknown Flag separat (siehe next step)
+            cmd_eff, ans_eff = r["cmd_old"], r["ans_old"]
+        
         item = {
             "dev_no": int(r["dev_no"]),
-            "cmd_id": int(r["cmd_new"] if ok else r["cmd_old"]),
-            "answer_id": int(r["ans_new"] if ok else r["ans_old"]),
+            "cmd_id": int(cmd_eff),
+            "answer_id": int(ans_eff),
         }
         if r.get("serial") is not None:
             item["serial"] = int(r["serial"])
+        # optional: unknown markieren
+        if state == "unknown":
+            item["unknown"] = True  # (wenn du das im YAML tolerierst)
         out.append(item)
     out.sort(key=lambda d: d["dev_no"])
     return out
@@ -260,6 +274,31 @@ def _finish_device_step(gsv: GSV86CAN, dev_no: int, serial: int | None, reason: 
 
     _pause(f"➡️  Bitte dieses Gerät {tag} JETZT vom Bus abnehmen/abschrauben, dann ENTER ...")
 
+def _probe_state_after_fail(
+    gsv: GSV86CAN,
+    dev_no: int,
+    cmd_old: int, ans_old: int,
+    cmd_new: int, ans_new: int,
+) -> str:
+    """
+    Best-effort: herausfinden, welche IDs gerade wirklich aktiv sind.
+    Returns: "old" | "new" | "unknown"
+    """
+    # 1) old testen
+    ok_old, _ = _activate(gsv, dev_no, cmd_old, ans_old)
+    if ok_old:
+        try: gsv.release(dev_no)
+        except Exception: pass
+        return "old"
+
+    # 2) new testen
+    ok_new, _ = _activate(gsv, dev_no, cmd_new, ans_new)
+    if ok_new:
+        try: gsv.release(dev_no)
+        except Exception: pass
+        return "new"
+
+    return "unknown"
 
 def _write_updated_yaml(
     src_path: Path,
@@ -295,6 +334,7 @@ def _write_updated_yaml(
         {
             "dev_no": int(d["dev_no"]),
             **({"serial": int(d["serial"])} if "serial" in d and d["serial"] is not None else {}),
+            **({"unknown": True} if d.get("unknown") else {}),
             "cmd_id": _hex_str(int(d["cmd_id"])),
             "answer_id": _hex_str(int(d["answer_id"])),
         }
@@ -371,7 +411,7 @@ def main() -> int:
                 # Aktivieren immer mit Default IDs
                 ok, sn = _activate(gsv, dev_no, DEFAULT_CMD_ID, DEFAULT_ANS_ID)
 
-                if not ok:
+                if not ok: # activate fail (not read serial fail. sn could be None)
                     # SN ist hier meistens None, aber wenn _activate SN gelesen hat, steht sie drin
                     results.append({
                         "dev_no": dev_no,
@@ -418,10 +458,13 @@ def main() -> int:
             
                 ok2, sn2 = _set_ids_reset_reactivate_verify_release(gsv, dev_no, sn, cmd_new, ans_new)
 
+                state = "new" if ok2 else _probe_state_after_fail(gsv, dev_no, cmd_id, ans_id, cmd_new, ans_new)
+
                 results.append({
                     "dev_no": dev_no,
                     "serial": sn2 if sn2 is not None else sn,
                     "ok": bool(ok2),
+                    "state": state,
                     "cmd_old": DEFAULT_CMD_ID,
                     "ans_old": DEFAULT_ANS_ID,
                     "cmd_new": cmd_new,
@@ -447,13 +490,14 @@ def main() -> int:
             current_ids = _effective_current_ids_from_results(results)
             current_default = _all_fail(results, len(DEVICE_CONFIG)) 
 
+            all_ok = _all_ok(results, len(DEVICE_CONFIG))
             dst = Path(CONFIG_PATH).with_name("config.updated.yaml")
             _write_updated_yaml(
                 src_path=Path(CONFIG_PATH),
                 dst_path=dst,
                 current_default=current_default,
                 current_ids=current_ids,
-                make_new_safe=True,
+                make_new_safe=all_ok,
             )
             print(f"[INFO] ✅ Updated YAML geschrieben: {dst}")
 
@@ -558,9 +602,11 @@ def main() -> int:
                 # 2-5) set default, reset, release, reactivate default, verify, release
                 ok2, sn2 = _set_ids_reset_reactivate_verify_release(gsv, dev_no, sn, cmd_new, ans_new)
 
+                state = "new" if ok2 else _probe_state_after_fail(gsv, dev_no, cmd_id, ans_id, cmd_new, ans_new)
+
                 results.append({
                     "dev_no": dev_no, "serial": sn2 if sn2 is not None else sn,
-                    "ok": bool(ok2),
+                    "ok": bool(ok2), "state": state,
                     "cmd_old": cmd_start, "ans_old": ans_start,
                     "cmd_new": cmd_new, "ans_new": ans_new,
                 })
@@ -577,13 +623,14 @@ def main() -> int:
             current_ids = _effective_current_ids_from_results(results)
             current_default = _all_ok(results, len(DEVICE_CONFIG))  # nur wenn ALLE wirklich default sind
 
+            all_ok = _all_ok(results, len(DEVICE_CONFIG))
             dst = Path(CONFIG_PATH).with_name("config.updated.yaml")
             _write_updated_yaml(
                 src_path=Path(CONFIG_PATH),
                 dst_path=dst,
                 current_default=current_default,
                 current_ids=current_ids,
-                make_new_safe=True,
+                make_new_safe=all_ok,
             )
             print(f"[INFO] ✅ Updated YAML geschrieben: {dst}")
 
@@ -682,10 +729,13 @@ def main() -> int:
 
                 ok2, sn2 = _set_ids_reset_reactivate_verify_release(gsv, dev_no, sn, cmd_new, ans_new)
 
+                state = "new" if ok2 else _probe_state_after_fail(gsv, dev_no, cmd_id, ans_id, cmd_new, ans_new)
+
                 results.append({
                     "dev_no": dev_no,
                     "serial": sn2 if sn2 is not None else sn,
                     "ok": bool(ok2),
+                    "state": state,
                     "cmd_old": cmd_id,
                     "ans_old": ans_id,
                     "cmd_new": cmd_new,
@@ -697,13 +747,14 @@ def main() -> int:
             current_ids = _effective_current_ids_from_results(results)
             current_default = False
 
+            all_ok = _all_ok(results, len(DEVICE_CONFIG))
             dst = Path(CONFIG_PATH).with_name("config.updated.yaml")
             _write_updated_yaml(
                 src_path=Path(CONFIG_PATH),
                 dst_path=dst,
                 current_default=current_default,
                 current_ids=current_ids,
-                make_new_safe=True,
+                make_new_safe=all_ok,
             )
             print(f"[INFO] ✅ Updated YAML geschrieben: {dst}")
             
