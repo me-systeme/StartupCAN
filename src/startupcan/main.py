@@ -164,10 +164,12 @@ def _set_ids_reset_reactivate_verify_release(
         gsv.release(dev_no)
         time.sleep(0.2)
 
-        ok, sn2 = _activate(gsv, dev_no, cmd_new, ans_new)
-        # Mit neuen IDs verbinden
+        ok = _try_activate_n(gsv, dev_no, cmd_new, ans_new, tries=5, delay=0.5)
         if not ok:
             return False, serial
+
+        # optional: SN nochmal lesen, wenn du willst (nur wenn aktiv)
+        sn2 = serial if serial is not None else _read_serial(gsv, dev_no)
         
         # wenn SN vorher unbekannt war, jetzt übernehmen
         serial = serial if serial is not None else sn2

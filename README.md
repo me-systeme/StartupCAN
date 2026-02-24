@@ -171,3 +171,183 @@ Diese Validierungen werden unabhängig vom Case geprüft:
 * ✅ `new.ids` darf `serial` enthalten oder nicht – wird ignoriert.
 
 * ✅ `current.ids` darf `serial` enthalten (wird für Check/Logging genutzt).
+
+## Fehler im run
+
+### Case 1: Multi-Device Update (`current.default = false`, `new.default = false`)
+
+In diesem Modus dürfen **alle Geräte gleichzeitig am CAN-Bus** betrieben werden, weil `devices.config.current.ids` eindeutige CAN-IDs enthält. Jedes Gerät wird nacheinander:
+
+1. mit den **current IDs** aktiviert,
+
+2. optional geprüft (Seriennummer / CAN-Settings),
+
+3. auf die **new IDs** umgestellt,
+
+4. per Reset/Release/Re-Activate verifiziert,
+
+5. danach wieder released,
+
+6. und am Ende wird eine **config.updated.yaml** geschrieben, die den Ist-Zustand abbildet.
+
+#### **Ablauf / Reihenfolge (pro Device)**
+
+**Schritt 1 - Activate (current IDs)**
+
+* `activate(dev_no, cmd_id, answer_id)`
+* Seriennummer wird gelesen (`get_serial_no`) und geloggt.
+
+Wenn Schritt 1 fehlschlägt: → siehe Fehlerfall **1**.
+
+Wenn Schritt 1 erfolgreich: → weiter mit Schritt **2**. 
+
+
+**Schritt 2 – Seriennummer-Check (optional, wenn serial in current.ids gesetzt)**
+
+Wenn `devices.config.current.ids` für dieses `dev_no` eine `serial` enthält, muss die gelesene Seriennummer passen:
+
+* 2.1 `sn is None` (SN konnte nicht gelesen werden) → Fehlerfall **2.1**
+
+* 2.2 `sn != expected_sn` → Fehlerfall **2.2**
+
+* Wenn SN ok oder keine SN in YAML gefordert ist → weiter mit Schritt **3**.
+
+Hinweis: In beiden Fehlerfällen ist das Gerät **aktiv gewesen**, deshalb wird **released**.
+
+
+**Schritt 3 – Read CAN Settings (optional / Best-Effort)**
+
+* get_can_settings liest CMD/ANS aus dem Gerät (Index-Konstanten müssen korrekt sein).
+
+* Fehler hier ist **nur eine Warnung** und stoppt den Ablauf nicht.
+
+**Wichtig:** Auch wenn Schritt 3 fehlschlägt, geht es **trotzdem weiter** zu Schritt **4**.
+
+
+**Schritt 4 – Set IDs → Reset → Release → Re-Activate → Verify → Release**
+
+* `set_can_settings(CANSET_CAN_IN_CMD_ID, cmd_new)`
+
+* `set_can_settings(CANSET_CAN_OUT_ANS_ID, ans_new)`
+
+* `reset_device()`
+
+* `release()`
+
+* Re-Activate mit `cmd_new/ans_new` (mit Retry-Logik `_try_activate_n`)
+
+* Verify über `get_can_settings` (Best-Effort)
+
+* abschließendes `release()`
+
+Wenn Schritt 4 erfolgreich ist → Device gilt als **OK / umgestellt**.
+
+Wenn Schritt 4 fehlschlägt → es wird eine **Zustandsprobe** durchgeführt (old/new/unknown) und entsprechend in `config.updated.yaml` eingetragen (siehe Fehlerfall **4**).
+
+#### **Fehlerfälle und Verhalten**
+
+1. **Activate (Step 1) schlägt fehl**
+
+**Symptom:** activate funktioniert nicht (Timeout/249/…); keine aktive Session.
+
+**Aktion:**
+
+* Gerät wird **nicht umgestellt.**
+
+* Gerät darf am Bus bleiben.
+
+* Ein `release()` ist nicht notwendig (weil keine aktive Session aufgebaut wurde; optional kann man trotzdem “best-effort” releasen, aber nicht nötig).
+
+**YAML-Update:**
+
+* In `current.ids` bleiben die bisherigen IDs (aus YAML) für dieses Gerät erhalten.
+
+* `new.ids` bleibt unverändert (Ziel bleibt weiter bestehen).
+
+2. **Serial-Check (Step 2) schlägt fehl (nur wenn serial: in current.ids gesetzt ist)**
+
+    2.1 **Seriennummer konnte nicht gelesen werden (sn is None)**
+
+**Aktion:**
+
+* Gerät wird **nicht umgestellt.**
+
+* Gerät darf am Bus bleiben.
+
+* Es wird `release()` ausgeführt (weil das Gerät aktiv war).
+
+**YAML-Update:**
+
+* `current.ids` bleibt auf den alten IDs; `serial` wird für dieses Gerät **nicht** übernommen (weil unbekannt).
+
+* `new.ids` bleibt bestehen (bei erneutem Run kann es wieder versucht werden).
+
+    2.2 **Seriennummer passt nicht (sn != expected_sn)**
+
+**Aktion:**
+
+* Gerät wird **nicht umgestellt** (Schutz vor “falsches Gerät unter falschem dev_no”).
+
+* Gerät darf am Bus bleiben.
+
+* `release()` wird ausgeführt (weil aktiv).
+
+**YAML-Update:**
+
+* `current.ids` bleibt auf den alten IDs.
+
+* Die gelesene Seriennummer wird in `config.updated.yaml` **mitgeschrieben**, damit man beim nächsten Run die Zuordnung korrigieren kann.
+
+* `new.ids` bleibt bestehen.
+
+3. **Read CAN Settings (Step 3) schlägt fehl**
+
+**Aktion:**
+
+* Nur Warnung, **kein Abbruch**.
+
+* Es wird trotzdem **Schritt 4** ausgeführt.
+
+**Interpretation:**
+
+* Index-Konstanten könnten falsch sein, oder Device liefert in diesem Zustand keine Settings.
+
+* Das betrifft nur die Verifikation/Diagnose, nicht zwingend das Umstellen selbst.
+
+4. **Umstellung/Verify (Step 4) schlägt fehl**
+
+**Aktion:**
+
+* Gerät wird **nicht sicher als umgestellt** markiert.
+
+* Danach wird “Best-Effort” geprüft, welche IDs tatsächlich aktiv sind:
+
+    * **state = "old"** → Gerät ist sehr wahrscheinlich auf den alten IDs geblieben
+
+    * **state = "new"** → Gerät ist sehr wahrscheinlich bereits auf neuen IDs
+
+    * **state = "unknown"** → weder old noch new konnte aktiviert werden
+
+* Gerät darf am Bus bleiben (Case 1 hat eindeutige IDs; unknown ist allerdings ein Warnzustand).
+
+**YAML-Update** (`config.updated.yaml`) **abhängig vom state**:
+
+* **state="old"** → `current.ids` bleibt auf alten IDs
+
+* **state="new"** → `current.ids` wird auf neue IDs gesetzt
+
+* **state="unknown"** → `current.ids` bleibt auf alten IDs **und** `unknown: true` wird gesetzt (als Warnflag)
+
+* `new.ids` bleibt unverändert (Ziel bleibt bestehen)
+
+#### **Erfolgsfall**
+
+Wenn ein Gerät erfolgreich umgestellt wurde (`ok=True`):
+
+* `config.updated.yaml` schreibt für dieses Gerät in `current.ids` die **neuen IDs** (und ggf. die Seriennummer).
+
+Wenn **alle** Geräte erfolgreich umgestellt wurden:
+
+* `new.ids` wird in `config.updated.yaml` geleert (und `new.default=false` bleibt).
+
+* Dadurch ist ein erneuter Run “safe” und versucht nicht erneut umzustellen.
