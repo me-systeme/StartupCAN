@@ -60,6 +60,10 @@ def fmt_can_id(x: int) -> str:
         return f"0x{x:03X}"
     return f"0x{x:X}"
 
+def _same_ids(cmd_a: int, ans_a: int, cmd_b: int, ans_b: int) -> bool:
+    return int(cmd_a) == int(cmd_b) and int(ans_a) == int(ans_b)
+
+
 def _target_ids(dev_no: int, serial: int | None) -> tuple[int, int]:
     """
     Liefert Ziel-IDs aus DEVICE_NEW.
@@ -786,6 +790,25 @@ def main() -> int:
 
                 if not ok:
                     print(f"[{_fmt_dev(dev_no, sn)}] WARN: Start-IDs stimmen nicht (trotz activation).")
+
+                if _same_ids(cmd_id, ans_id, cmd_new, ans_new):
+                    print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs == aktuelle YAML-IDs. Skip reprogram/reset.")
+                    results.append({
+                        "dev_no": dev_no,
+                        "serial": sn,
+                        "ok": True,
+                        "state": "new",     # effektiv "already new"
+                        "cmd_old": cmd_id,
+                        "ans_old": ans_id,
+                        "cmd_new": cmd_new,
+                        "ans_new": ans_new,
+                    })
+                    try:
+                        gsv.release(dev_no)
+                    except Exception:
+                        pass
+                    print("-" * 80)
+                    continue
 
                 ok2, sn2 = _set_ids_reset_reactivate_verify_release(gsv, dev_no, sn, cmd_new, ans_new)
 
