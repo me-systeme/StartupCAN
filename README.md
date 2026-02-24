@@ -172,9 +172,32 @@ Diese Validierungen werden unabhängig vom Case geprüft:
 
 * ✅ `current.ids` darf `serial` enthalten (wird für Check/Logging genutzt).
 
-## Fehler im run
 
-### Case 1: Multi-Device Update (`current.default = false`, `new.default = false`)
+
+
+## Case 1 – Multi-Device Update (`current.default=false`, `new.default=false`)
+
+```mermaid
+flowchart TD
+  A["Start: Device aus current.ids"] --> B["1. Activate mit current IDs"]
+
+  B -->|FAIL| F1["FAIL#1<br/>Activate fehlgeschlagen<br/>→ keine Umstellung<br/>→ current bleibt alt"]
+  B -->|OK| C["2. Serial-Check<br/>nur wenn serial in current.ids"]
+
+  C -->|FAIL| F2["FAIL#2<br/>Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine Umstellung"]
+  C -->|OK| D["3. Read CAN Settings<br/>(best-effort)"]
+
+  D -->|Warnung| E
+  D -->|OK| E["4. Set new IDs<br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
+
+  E -->|OK| S["SUCCESS<br/>current.ids = new IDs"]
+  E -->|FAIL| P["State-Probe<br/>old / new / unknown"]
+
+  P -->|old| O["current.ids bleibt alt"]
+  P -->|new| N["current.ids = new IDs"]
+  P -->|unknown| U["current.ids alt + unknown=true"]
+
+``` 
 
 In diesem Modus dürfen **alle Geräte gleichzeitig am CAN-Bus** betrieben werden, weil `devices.config.current.ids` eindeutige CAN-IDs enthält. Jedes Gerät wird nacheinander:
 
@@ -190,7 +213,7 @@ In diesem Modus dürfen **alle Geräte gleichzeitig am CAN-Bus** betrieben werde
 
 6. und am Ende wird eine **config.updated.yaml** geschrieben, die den Ist-Zustand abbildet.
 
-#### **Ablauf / Reihenfolge (pro Device)**
+### **Ablauf / Reihenfolge (pro Device)**
 
 **Schritt 1 - Activate (current IDs)**
 
@@ -244,7 +267,7 @@ Wenn Schritt 4 erfolgreich ist → Device gilt als **OK / umgestellt**.
 
 Wenn Schritt 4 fehlschlägt → es wird eine **Zustandsprobe** durchgeführt (old/new/unknown) und entsprechend in `config.updated.yaml` eingetragen (siehe Fehlerfall **4**).
 
-#### **Fehlerfälle und Verhalten**
+### **Fehlerfälle und Verhalten**
 
 1. **Activate (Step 1) schlägt fehl**
 
@@ -340,7 +363,7 @@ Wenn Schritt 4 fehlschlägt → es wird eine **Zustandsprobe** durchgeführt (ol
 
 * `new.ids` bleibt unverändert (Ziel bleibt bestehen)
 
-#### **Erfolgsfall**
+### **Erfolgsfall**
 
 Wenn ein Gerät erfolgreich umgestellt wurde (`ok=True`):
 
