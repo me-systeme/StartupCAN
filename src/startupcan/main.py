@@ -124,20 +124,6 @@ def _verify_ids(gsv: GSV86CAN, dev_no: int, serial: int | None, exp_cmd: int, ex
         print(f"[{_fmt_dev(dev_no, serial)}] WARN: verify failed: {e}")
         return False
 
-
-
-def _activate(gsv: GSV86CAN, dev_no: int, cmd: int, ans: int) -> tuple[bool, int | None]:
-    print(f"[DEV {dev_no}] activating with CMD={fmt_can_id(cmd)} ANS={fmt_can_id(ans)} ...")
-    try:
-        nchan = gsv.activate(dev_no, cmd, ans)
-        sn = _read_serial(gsv, dev_no)
-        print(f"[{_fmt_dev(dev_no, sn)}] activate OK, channels={nchan}")
-        return True, sn
-    except Exception as e:
-        print(f"[DEV {dev_no}] activate FAIL: {e}")
-        return False, None
-
-    
 def _set_ids_reset_reactivate_verify_release(
     gsv: GSV86CAN,
     dev_no: int,
@@ -152,6 +138,17 @@ def _set_ids_reset_reactivate_verify_release(
     Danach ist das Device NICHT mehr aktiv (bewusst).
     """
     try:
+        # if dev_no == 1:
+        #     cmd_new_test = 258 # 0x102
+        #     ans_new_test = 259 # 0x103
+        #     print(f"[{_fmt_dev(dev_no, serial)}] set NEW IDs: CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)}")
+        #     gsv.set_can_settings(dev_no, CANSET_CAN_IN_CMD_ID, cmd_new_test)
+        #     gsv.set_can_settings(dev_no, CANSET_CAN_OUT_ANS_ID, ans_new_test)
+        # else:
+        #     print(f"[{_fmt_dev(dev_no, serial)}] set NEW IDs: CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)}")
+        #     gsv.set_can_settings(dev_no, CANSET_CAN_IN_CMD_ID, cmd_new)
+        #     gsv.set_can_settings(dev_no, CANSET_CAN_OUT_ANS_ID, ans_new)
+
         print(f"[{_fmt_dev(dev_no, serial)}] set NEW IDs: CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)}")
         gsv.set_can_settings(dev_no, CANSET_CAN_IN_CMD_ID, cmd_new)
         gsv.set_can_settings(dev_no, CANSET_CAN_OUT_ANS_ID, ans_new)
@@ -164,14 +161,10 @@ def _set_ids_reset_reactivate_verify_release(
         gsv.release(dev_no)
         time.sleep(0.2)
 
-        ok = _try_activate_n(gsv, dev_no, cmd_new, ans_new, tries=5, delay=0.5)
+        ok, sn2 = _try_activate(gsv, dev_no, cmd_new, ans_new, tries=8, delay=0.5, read_sn=True)
         if not ok:
             return False, serial
 
-        # optional: SN nochmal lesen, wenn du willst (nur wenn aktiv)
-        sn2 = serial if serial is not None else _read_serial(gsv, dev_no)
-        
-        # wenn SN vorher unbekannt war, jetzt übernehmen
         serial = serial if serial is not None else sn2
 
         ok_verify = _verify_ids(gsv, dev_no, serial, cmd_new, ans_new)
@@ -279,13 +272,52 @@ def _finish_device_step(gsv: GSV86CAN, dev_no: int, serial: int | None, reason: 
 
     _pause(f"➡️  Bitte dieses Gerät {tag} JETZT vom Bus abnehmen/abschrauben, dann ENTER ...")
 
-def _try_activate_n(gsv, dev_no, cmd, ans, tries=3, delay=0.3):
-    for _ in range(tries):
-        ok, _ = _activate(gsv, dev_no, cmd, ans)
-        if ok:
-            return True
-        time.sleep(delay)
-    return False
+def _try_activate_n(gsv, dev_no, cmd, ans, tries=5, delay=0.3) -> bool:
+    ok, _ = _try_activate(gsv, dev_no, cmd, ans, tries=tries, delay=delay, read_sn=False, verbose=False)
+    return ok
+
+def _try_activate(
+    gsv: GSV86CAN,
+    dev_no: int,
+    cmd: int,
+    ans: int,
+    tries: int = 5,
+    delay: float = 0.3,
+    read_sn: bool = True,
+    verbose: bool = True
+) -> tuple[bool, int | None]:
+    """
+    Mehrfaches Activate (robust gegen sporadische CAN/Timing Issues).
+    Gibt (ok, serial) zurück.
+    """
+    last_err = None
+    # try:
+    #     gsv.release(dev_no)
+    # except Exception:
+    #     pass
+
+    for i in range(tries):
+        if verbose:
+            print(f"[DEV {dev_no}] activate try {i+1}/{tries}: CMD={fmt_can_id(cmd)} ANS={fmt_can_id(ans)}")
+        try:
+            gsv.activate(dev_no, cmd, ans)
+            # sn = None
+            sn = _read_serial(gsv, dev_no) if read_sn else None
+            if verbose: 
+                if read_sn:
+                    print(f"[{_fmt_dev(dev_no, sn)}] activate OK")
+                else:
+                    print(f"[DEV {dev_no}] activate OK")
+            return True, sn
+        except Exception as e:
+            last_err = e
+            if i < tries - 1:
+                time.sleep(delay)
+
+    if verbose:
+        print(f"[DEV {dev_no}] activate FAIL after {tries} tries: {last_err}")
+    return False, None
+
 
 def _probe_state_after_fail(
     gsv: GSV86CAN,
@@ -429,7 +461,7 @@ def main() -> int:
                 _pause("Wenn angeschlossen:")
 
                 # Aktivieren immer mit Default IDs
-                ok, sn = _activate(gsv, dev_no, DEFAULT_CMD_ID, DEFAULT_ANS_ID)
+                ok, sn = _try_activate(gsv, dev_no, DEFAULT_CMD_ID, DEFAULT_ANS_ID, tries=5, delay=0.3, read_sn=True)
 
                 if not ok: # activate fail (not read serial fail. sn could be None)
                     # SN ist hier meistens None, aber wenn _activate SN gelesen hat, steht sie drin
@@ -563,7 +595,7 @@ def main() -> int:
                 expected_sn = d.get("serial") if isinstance(d, dict) else None
 
                 # 1) activate mit current IDs
-                ok, sn = _activate(gsv, dev_no, cmd_start, ans_start)
+                ok, sn = _try_activate(gsv, dev_no, cmd_start, ans_start, tries=5, delay=0.3, read_sn=True)
                 if not ok:
                     results.append({
                         "dev_no": dev_no, "serial": sn, "ok": False,
@@ -692,7 +724,7 @@ def main() -> int:
                 
                 expected_sn = d.get("serial") if isinstance(d, dict) else None
 
-                ok, sn = _activate(gsv, dev_no, cmd_id, ans_id)
+                ok, sn = _try_activate(gsv, dev_no, cmd_id, ans_id, tries=5, delay=0.3, read_sn=True)
                 if not ok:
                     results.append({
                         "dev_no": dev_no,

@@ -191,7 +191,7 @@ flowchart TD
   D -->|OK| E["4. Set new IDs<br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
 
   E -->|OK| S["SUCCESS<br/>current.ids = new IDs"]
-  E -->|FAIL| P["State-Probe<br/>old / new / unknown"]
+  E -->|FAIL| P["FAIL#4<br/>State-Probe<br/>old / new / unknown"]
 
   P -->|old| O["current.ids bleibt alt"]
   P -->|new| N["current.ids = new IDs"]
@@ -217,6 +217,11 @@ In diesem Modus dürfen **alle Geräte gleichzeitig am CAN-Bus** betrieben werde
 
 **Schritt 1 - Activate (current IDs)**
 
+```mermaid
+flowchart TD
+    A["1. Activate mit current IDs"]
+```
+
 * `activate(dev_no, cmd_id, answer_id)`
 * Seriennummer wird gelesen (`get_serial_no`) und geloggt.
 
@@ -226,6 +231,11 @@ Wenn Schritt 1 erfolgreich: → weiter mit Schritt **2**.
 
 
 **Schritt 2 – Seriennummer-Check (optional, wenn serial in current.ids gesetzt)**
+
+```mermaid
+flowchart TD
+A["2. Serial-Check<br/>nur wenn serial in current.ids"]
+```
 
 Wenn `devices.config.current.ids` für dieses `dev_no` eine `serial` enthält, muss die gelesene Seriennummer passen:
 
@@ -240,6 +250,11 @@ Hinweis: In beiden Fehlerfällen ist das Gerät **aktiv gewesen**, deshalb wird 
 
 **Schritt 3 – Read CAN Settings (optional / Best-Effort)**
 
+```mermaid
+flowchart TD
+A["3. Read CAN Settings<br/>(best-effort)"]
+``` 
+
 * get_can_settings liest CMD/ANS aus dem Gerät (Index-Konstanten müssen korrekt sein).
 
 * Fehler hier ist **nur eine Warnung** und stoppt den Ablauf nicht.
@@ -248,6 +263,11 @@ Hinweis: In beiden Fehlerfällen ist das Gerät **aktiv gewesen**, deshalb wird 
 
 
 **Schritt 4 – Set IDs → Reset → Release → Re-Activate → Verify → Release**
+
+```mermaid
+flowchart TD
+A["4. Set new IDs<br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
+``` 
 
 * `set_can_settings(CANSET_CAN_IN_CMD_ID, cmd_new)`
 
@@ -269,7 +289,12 @@ Wenn Schritt 4 fehlschlägt → es wird eine **Zustandsprobe** durchgeführt (ol
 
 ### **Fehlerfälle und Verhalten**
 
-1. **Activate (Step 1) schlägt fehl**
+**1. Activate (Step 1) schlägt fehl**
+
+```mermaid
+flowchart TD
+A["FAIL#1<br/>Activate fehlgeschlagen<br/>→ keine Umstellung<br/>→ current bleibt alt"]
+```
 
 **Symptom:** activate funktioniert nicht (Timeout/249/…); keine aktive Session.
 
@@ -287,9 +312,14 @@ Wenn Schritt 4 fehlschlägt → es wird eine **Zustandsprobe** durchgeführt (ol
 
 * `new.ids` bleibt unverändert (Ziel bleibt weiter bestehen).
 
-2. **Serial-Check (Step 2) schlägt fehl (nur wenn serial: in current.ids gesetzt ist)**
+**2. Serial-Check (Step 2) schlägt fehl (nur wenn serial: in current.ids gesetzt ist)**
 
-    2.1 **Seriennummer konnte nicht gelesen werden (sn is None)**
+```mermaid
+flowchart TD
+A["FAIL#2<br/>Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine Umstellung"]
+```
+    
+**2.1 Seriennummer konnte nicht gelesen werden (sn is None)**
 
 **Aktion:**
 
@@ -305,7 +335,7 @@ Wenn Schritt 4 fehlschlägt → es wird eine **Zustandsprobe** durchgeführt (ol
 
 * `new.ids` bleibt bestehen (bei erneutem Run kann es wieder versucht werden).
 
-    2.2 **Seriennummer passt nicht (sn != expected_sn)**
+**2.2 Seriennummer passt nicht (sn != expected_sn)**
 
 **Aktion:**
 
@@ -323,7 +353,12 @@ Wenn Schritt 4 fehlschlägt → es wird eine **Zustandsprobe** durchgeführt (ol
 
 * `new.ids` bleibt bestehen.
 
-3. **Read CAN Settings (Step 3) schlägt fehl**
+**3. Read CAN Settings (Step 3) schlägt fehl**
+
+```mermaid
+flowchart TD
+A["FAIL#3<br/>Warnung"]
+```
 
 **Aktion:**
 
@@ -337,7 +372,12 @@ Wenn Schritt 4 fehlschlägt → es wird eine **Zustandsprobe** durchgeführt (ol
 
 * Das betrifft nur die Verifikation/Diagnose, nicht zwingend das Umstellen selbst.
 
-4. **Umstellung/Verify (Step 4) schlägt fehl**
+**4. Umstellung/Verify (Step 4) schlägt fehl**
+
+```mermaid
+flowchart TD
+A["FAIL#4<br/>State-Probe<br/>old / new / unknown"]
+```
 
 **Aktion:**
 
@@ -364,6 +404,11 @@ Wenn Schritt 4 fehlschlägt → es wird eine **Zustandsprobe** durchgeführt (ol
 * `new.ids` bleibt unverändert (Ziel bleibt bestehen)
 
 ### **Erfolgsfall**
+
+```mermaid
+flowchart TD
+A["SUCCESS<br/>current.ids = new IDs"]
+```
 
 Wenn ein Gerät erfolgreich umgestellt wurde (`ok=True`):
 

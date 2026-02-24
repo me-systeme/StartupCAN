@@ -18,14 +18,17 @@ devices:
       default: false
       ids:
         - dev_no: 1
-          cmd_id: "0x202"
-          answer_id: "0x203"
+          serial: 25455437
+          cmd_id: '0x202'
+          answer_id: '0x203'
         - dev_no: 2
-          cmd_id: "0x204"
-          answer_id: "0x205"
+          serial: 25455423
+          cmd_id: '0x204'
+          answer_id: '0x205'
         - dev_no: 3
-          cmd_id: "0x206"
-          answer_id: "0x207"
+          serial: 25455439
+          cmd_id: '0x206'
+          answer_id: '0x207'
     new:
-      default: true
+      default: false
       ids: []
