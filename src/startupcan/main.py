@@ -205,11 +205,14 @@ def _print_summary(rows: list[dict]):
         ans_new = r["ans_new"]
         serial = r.get("serial")
         tag = f"DEV {dev_no} (SN={serial if serial is not None else '?'})"
+        state = r.get("state", "")
+        state_txt = f" | state={state}" if state else ""
         print(
             f"{tag}: "
             f"{'OK ' if ok else 'FAIL'} | "
             f"{fmt_can_id(cmd_old)}/{fmt_can_id(ans_old)}  ->  "
             f"{fmt_can_id(cmd_new)}/{fmt_can_id(ans_new)}"
+            f"{state_txt}"
         )
     print("=" * 80 + "\n")
 
@@ -274,6 +277,14 @@ def _finish_device_step(gsv: GSV86CAN, dev_no: int, serial: int | None, reason: 
 
     _pause(f"➡️  Bitte dieses Gerät {tag} JETZT vom Bus abnehmen/abschrauben, dann ENTER ...")
 
+def _try_activate_n(gsv, dev_no, cmd, ans, tries=3, delay=0.3):
+    for _ in range(tries):
+        ok, _ = _activate(gsv, dev_no, cmd, ans)
+        if ok:
+            return True
+        time.sleep(delay)
+    return False
+
 def _probe_state_after_fail(
     gsv: GSV86CAN,
     dev_no: int,
@@ -284,15 +295,22 @@ def _probe_state_after_fail(
     Best-effort: herausfinden, welche IDs gerade wirklich aktiv sind.
     Returns: "old" | "new" | "unknown"
     """
+
+    try:
+        gsv.release(dev_no)
+    except Exception:
+        pass
+    time.sleep(0.3)  
+
     # 1) old testen
-    ok_old, _ = _activate(gsv, dev_no, cmd_old, ans_old)
+    ok_old = _try_activate_n(gsv, dev_no, cmd_old, ans_old)
     if ok_old:
         try: gsv.release(dev_no)
         except Exception: pass
         return "old"
 
     # 2) new testen
-    ok_new, _ = _activate(gsv, dev_no, cmd_new, ans_new)
+    ok_new = _try_activate_n(gsv, dev_no, cmd_new, ans_new)
     if ok_new:
         try: gsv.release(dev_no)
         except Exception: pass
@@ -458,7 +476,11 @@ def main() -> int:
             
                 ok2, sn2 = _set_ids_reset_reactivate_verify_release(gsv, dev_no, sn, cmd_new, ans_new)
 
-                state = "new" if ok2 else _probe_state_after_fail(gsv, dev_no, cmd_id, ans_id, cmd_new, ans_new)
+                state = "new" if ok2 else _probe_state_after_fail(
+                    gsv, dev_no,
+                    DEFAULT_CMD_ID, DEFAULT_ANS_ID,
+                    cmd_new, ans_new
+                )
 
                 results.append({
                     "dev_no": dev_no,
@@ -602,7 +624,11 @@ def main() -> int:
                 # 2-5) set default, reset, release, reactivate default, verify, release
                 ok2, sn2 = _set_ids_reset_reactivate_verify_release(gsv, dev_no, sn, cmd_new, ans_new)
 
-                state = "new" if ok2 else _probe_state_after_fail(gsv, dev_no, cmd_id, ans_id, cmd_new, ans_new)
+                state = "new" if ok2 else _probe_state_after_fail(
+                    gsv, dev_no,
+                    cmd_start, ans_start,
+                    cmd_new, ans_new
+                )
 
                 results.append({
                     "dev_no": dev_no, "serial": sn2 if sn2 is not None else sn,
