@@ -15,7 +15,7 @@ devices:
       default_cmd_id: "0x100"
       default_ans_id: "0x101"
     current: 
-      default: true
+      default: false
       ids:
         - dev_no: 1
           cmd_id: "0x102"

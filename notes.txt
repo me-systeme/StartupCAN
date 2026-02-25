@@ -1,0 +1,17 @@
+mir ist noch etwas aufgefallen. ich habe in case 1 gesagt, dass das gerät nach erfolglosem ersten aktivieren am bus bleiben darf. wenn zb keine serial in current angegeben ist, heißt das ja vielleicht, dass kein gerät mit der angegeben can id am bus ist. wenn zb 3 geräte am bus sind und eins schlägt beim aktivieren fehl, kennen wir von min. einem device nicht die can id. ich dachte, dass das gerät dann am bus bleiben darf wegen konfigurationsfehler 7. aber dadurch, dass wir die can id nicht kennen, könnte es schon passieren, dass ein anderes gerät dieselbe can id bekommt wie das unbekannte gerät. die current.ids liste ist nämlich halt falsch. 
+daher muss das gerät hier auch vom bus genommen werden meiner meinung nach.
+so ähnlich ist es auch bei case 3. 
+
+in case 3 könnte könnte man mit einer probe schauen, ob das gerät eigentlich schon default ist. dann muss es aber danach natürlich auch vom bus genommen werden. wenn die probe fehlschlägt, muss es auch vom bus genommen werden und in der neuen liste unknown= true vermerkt werden, da wir nicht wissen, ob es zb die can id des nächsten gerätes hat. 
+
+in case 1 habe ich erst gedacht, dass man alle can ids in new.ids probieren könnte um sicher zu gehen dass konfig fehler 7 nicht eintritt, aber das wäre für eine große liste von devices zu viel. also sollte es einfach vom bus abgenommen werden. 
+
+aber: wenn keine serial in current konfiguriert ist, woher soll man dann wissen, welches gerät abgenommen werden muss? das mapping can id <-> device fehlt hier. 
+um die sache zu vereinfachen, wäre es vielleicht besser, wenn serial in current.ids in case 1 und case 3 verpflichtend sind. dann hätte man die mappings (new can id <- dev_no - >) current can id <- serial - > device
+aber: wenn das erste activate fehlschlägt, wissen wir nicht, ob das mapping current can id <-> device korrekt ist. (eventuell nimmt man das falsche device vom bus und das unbekannte bleibt hängen)
+
+also ist die verpflichtende serial nicht die lösung. 
+
+ich denke, die lösung ist, dass man vor dem starten des ablaufs nicht erlaubt, dass alle geräte gleichzeitig am bus sind (so wie in case 2). man bearbeitet jedes device nacheinander und wenn das first activate fehlschlägt, nimmt man das device wieder ab, das man gerade angeschlossen hat. dann kann es nur noch passieren, dass das gerade angeschlossene gerät die gleiche can id wie eines der bereits angeschlossenen geräte hat. jetzt stellt sich ja die frage: lassen wir zu, dass (kurzzeitig) max. 2 geräte die gleiche can id am bus haben? oder müssen wir das wegen der kollision auch ausschließen? wenn wir das auch ausschließen müssen, können wir im startupcan eigentlich nur erlauben, dass immer nur ein gerät am bus ist. das wäre ja schon unpraktischer, aber eventuell sicherer. in den can grundlagen steht ja eigentlich, dass die can ids immer eindeutig sein müssen. diese regel möchte ich ungern missachten. was meinst du?
+
+hier https://www.me-systeme.de/de/grundlagen/canbus ist zb von einem eindeutigen identifier die rede.
