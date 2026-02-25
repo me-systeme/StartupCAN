@@ -112,6 +112,8 @@ Wenn Schritt 4 erfolgreich ist → Device gilt als **OK / umgestellt**.
 
 Wenn Schritt 4 fehlschlägt → es wird eine **Zustandsprobe** durchgeführt (old/new/unknown) und entsprechend in `config.updated.yaml` eingetragen (siehe Fehlerfall **4**).
 
+
+
 ### **Fehlerfälle und Verhalten**
 
 **1. Activate (Step 1) schlägt fehl**
@@ -325,6 +327,208 @@ Wenn `devices.config.current.ids` für dieses `dev_no` eine `serial` enthält, m
 
 Hinweis: In beiden Fehlerfällen war das Gerät aktiv → es wird **released**.
 
+
+**Schritt 3 – Read CAN Settings (optional / Best-Effort)**
+
+```mermaid
+flowchart TD
+A["3. Read CAN Settings<br/>(best-effort)"]
+```
+
+* `get_can_settings()` liest CMD/ANS (Index-Konstanten müssen korrekt sein)
+
+* Fehler hier ist **nur Warnung** und stoppt den Ablauf nicht.
+
+Auch wenn Schritt 3 fehlschlägt, geht es weiter zu Schritt **4**.
+
+
+**Schritt 4 – Set DEFAULT IDs → Reset → Release → Re-Activate → Verify → Release**
+
+```mermaid
+flowchart TD
+A["4. Set DEFAULT IDs<br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
+```
+
+* `set_can_settings(CANSET_CAN_IN_CMD_ID, DEFAULT_CMD_ID)`
+
+* `set_can_settings(CANSET_CAN_OUT_ANS_ID, DEFAULT_ANS_ID)`
+
+* `reset_device()`
+
+* `release()`
+
+* Re-Activate mit DEFAULT IDs (Retry `_try_activate`)
+
+* Verify via `get_can_settings` (Best-Effort)
+
+* abschließendes `release()`
+
+Wenn Schritt 4 erfolgreich → Gerät gilt als **DEFAULT / OK**.
+
+Wenn Schritt 4 fehlschlägt → Fehlerfall **4** (State-Probe).
+
+
+### **Fehlerfälle und Verhalten**
+
+**1. Activate (Step 1) schlägt fehl**
+
+```mermaid
+flowchart TD
+A["FAIL#1<br/>Activate fehlgeschlagen<br/>→ keine Umstellung<br/>→ current bleibt alt"]
+```
+
+**Aktion:**
+
+* Gerät wird **nicht umgestellt**
+
+* Gerät darf am Bus bleiben (es ist ja weiterhin “current”, also eindeutig)
+
+* `release()` nicht notwendig (keine Session aufgebaut), optional best-effort ok
+
+**YAML-Update:**
+
+* `current.ids` bleibt auf **alten** IDs
+
+* Ziel bleibt bestehen (`new.default=true`), weil Reset-Wizard noch nicht komplett erfolgreich war
+
+
+**2. Serial-Check (Step 2) schlägt fehl (nur wenn `serial:` in current.ids gesetzt)**
+
+```mermaid
+flowchart TD
+A["FAIL#2<br/>Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine Umstellung"]
+```
+
+**2.1 Seriennummer konnte nicht gelesen werden (sn is None)**
+
+**Aktion:**
+
+* Gerät wird **nicht umgestellt**
+
+* Gerät darf am Bus bleiben
+
+* `release()` wird gemacht (weil aktiv)
+
+**YAML-Update:**
+
+* `current.ids` bleibt alt
+
+* `serial` nicht übernehmen (unbekannt)
+
+* Ziel bleibt bestehen (`new.default=true`), weil Reset-Wizard noch nicht komplett erfolgreich war
+
+**2.2 Seriennummer passt nicht (sn != expected_sn)**
+
+**Aktion:**
+
+* Schutz: Gerät wird **nicht** umgestellt (falsches Gerät unter falschem dev_no)
+
+* Gerät darf am Bus bleiben
+
+* `release()` (weil aktiv)
+
+**YAML-Update:**
+
+* `current.ids` bleibt alt
+
+* gelesene SN kann optional in `config.updated.yaml` mitgeschrieben werden (für Debug/Zuordnung)
+
+* Ziel bleibt bestehen (`new.default=true`), weil Reset-Wizard noch nicht komplett erfolgreich war
+
+
+**3. Read CAN Settings (Step 3) schlägt fehl**
+
+```mermaid
+flowchart TD
+A["FAIL#3<br/>Warnung"]
+```
+
+**Aktion:**
+
+* Nur Warnung, **kein Abbruch**
+
+* Schritt 4 läuft trotzdem
+
+
+**4. Umstellung/Verify (Step 4) schlägt fehl → State-Probe + Bus-Sicherheitsregel**
+
+```mermaid
+flowchart TD
+A["FAIL#4<br/>State-Probe<br/>old / new(default) / unknown"]
+```
+
+**Aktion:**
+
+* Gerät ist **nicht sicher** als “auf current” oder “auf default” klassifizierbar
+
+* Best-Effort State-Probe:
+
+    * **state="old"** → Device ist sehr wahrscheinlich noch auf old/current IDs
+
+    * **state="new"** → Device ist sehr wahrscheinlich bereits DEFAULT
+
+    * **state="unknown"** → weder old noch default konnte aktiviert werden
+
+**Wichtig (Case-3-Regel):**
+
+* Nach diesem Fehler wird das Gerät **immer vom Bus genommen**, weil:
+
+    * falls es bereits DEFAULT ist → Kollision mit späteren DEFAULT-Devices
+
+    * falls unknown → Risiko, dass es DEFAULT oder “halb umgestellt” ist
+
+**YAML-Update** (`config.updated.yaml`) abhängig vom state:
+
+* **state="old"** → `current.ids` bleibt alt
+
+* **state="new"** → `current.ids = DEFAULT IDs`
+
+* **state="unknown"** → `current.ids` bleibt alt + `unknown: true`
+
+
+### **Erfolgsfall**
+
+```mermaid
+flowchart TD
+A["SUCCESS<br/>current.ids = DEFAULT IDs<br/>→ Device MUSS vom Bus"]
+```
+
+Wenn `ok=True`:
+
+* `current.ids` wird in `config.updated.yaml` für dieses Gerät auf **DEFAULT IDs** gesetzt
+
+* Gerät wird **zwingend vom Bus genommen** (weil DEFAULT nicht bus-multidevice-fähig ist)
+
+
+### **Ergebnis am Ende (YAML-Schreiblogik)**
+
+Nach dem Wizard werden die `results` in `config.updated.yaml` übertragen:
+
+* Für jedes Device:
+
+    * `ok=True` → `current.ids = DEFAULT IDs`
+
+    * `ok=False` → je nach `state` (old/new/unknown) wie oben beschrieben
+
+* `current.default`:
+
+    * **true**, wenn **alle** Geräte erfolgreich auf DEFAULT gesetzt wurden
+
+    * sonst **false** (gemischter/teilweiser Zustand möglich)
+
+* `new` wird “safe” gemacht **nur wenn alles OK**:
+
+    * wenn **alle ok**:
+
+        * `new.default = false`
+
+        * `new.ids = []`
+
+    * wenn **irgendeins fail**:
+
+        * `new.default` bleibt **true** (Ziel “reset to default” bleibt bestehen)
+
+        * `new.ids` ist i.d.R. egal/leer, weil `new.default=true` dominiert
 
 
 ## Geräte-Konfiguration (devices.config)
