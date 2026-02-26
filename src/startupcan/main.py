@@ -890,7 +890,7 @@ def main() -> int:
             if _all_ok(results, len(DEVICE_CONFIG)):
                 print("\n[INFO] new.default=false: Geräte dürfen gleichzeitig am Bus sein (IDs eindeutig).")
             else:
-                print("[WARN] Nicht alle Devices erfolgreich. YAML enthält Ist-Stand (teils alte IDs).")
+                print("[WARN] Nicht alle Devices erfolgreich. YAML enthält Ist-Stand (teils alte IDs). Prüfe zunächst die YAML bevor alle Geräte gleichzeitig am Bus angeschlossen werden. (Keine doppelten CAN IDs oder unknown: true!)")
 
             
             return 0 

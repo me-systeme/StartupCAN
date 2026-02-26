@@ -188,8 +188,6 @@ def load_config(path: Path) -> dict:
             dup = next(n for n in dev_nos if dev_nos.count(n) > 1)
             raise ValueError(f"{name}: dev_no={dup} kommt mehrfach vor.")
         
-    def _by_devno(items: list[dict]) -> dict[int, dict]:
-        return {int(d["dev_no"]): d for d in (items or [])}
     
     device_current = _norm_list(current_block.get("ids", []))
     device_new_raw = _norm_list(new_block.get("ids", []))
@@ -242,11 +240,13 @@ def load_config(path: Path) -> dict:
         return True
 
 
+    # current.ids: DOPPELTE IDs sind erlaubt (one-device-regel)
+    # aber cmd_id != answer_id pro Gerät bleibt Pflicht.
     if device_current:
         _assert_unique_can_fields(
             "devices.config.current.ids",
             device_current,
-            strict_numbers=not current_default_mode,  # <-- WICHTIG
+            strict_numbers=False,   # <-- relaxed
         )
 
     if device_new_raw:
@@ -260,12 +260,6 @@ def load_config(path: Path) -> dict:
     # Allowed mode combinations
     # -------------------------------------------------------------------------
     
-    def _id_numbers(items: list[dict]) -> set[int]:
-        s: set[int] = set()
-        for d in (items or []):
-            s.add(int(d["cmd_id"]))
-            s.add(int(d["answer_id"]))
-        return s
     
     def _has_serials(items: list[dict]) -> bool:
         return any(("serial" in d and d["serial"] is not None) for d in (items or []))
@@ -324,35 +318,6 @@ def load_config(path: Path) -> dict:
         IGNORE_NEW_SERIALS = _has_serials(device_new_raw)
 
         SN_MODE = False
-        
-        current_nums = _id_numbers(device_current)
-
-        cur_by = _by_devno(device_current)
-        new_by = _by_devno(device_new_raw)
-
-        # Nur IDs der Geräte betrachten, die sich WIRKLICH ändern sollen.
-        changed_new_nums: set[int] = set()
-        for dev_no, nd in new_by.items():
-            cd = cur_by.get(dev_no)
-            if cd is None:
-                # sollte durch _assert_same_dev_nos nie passieren, aber sauber bleiben
-                raise ValueError(f"devices.config.new.ids enthält dev_no={dev_no}, das in current.ids fehlt.")
-
-            if int(nd["cmd_id"]) != int(cd["cmd_id"]) or int(nd["answer_id"]) != int(cd["answer_id"]):
-                changed_new_nums.add(int(nd["cmd_id"]))
-                changed_new_nums.add(int(nd["answer_id"]))
-
-        # Wenn nichts geändert wird, ist das ok (no-op run).
-        overlap_nums = current_nums & changed_new_nums
-        if overlap_nums:
-            ex = next(iter(overlap_nums))
-            raise ValueError(
-                "current.default=false & new.default=false (Partial allowed): "
-                "Eine CAN-ID, die im current Bus bereits existiert, darf nicht als Ziel-ID "
-                "für ein GEÄNDERTES Gerät verwendet werden. "
-                f"Beispiel Überschneidung: 0x{ex:X} ({ex}). "
-                "Hinweis: No-op Einträge (new==current pro dev_no) sind erlaubt."
-            )
 
         dev_nos_for_run = [d["dev_no"] for d in device_current]  # Quelle: current
         # Ziel ist new.ids wie angegeben
@@ -376,38 +341,12 @@ def load_config(path: Path) -> dict:
             for n in dev_nos_for_run
         ]
 
-        new_nums = _id_numbers(device_new)
-        if default_cmd_id in new_nums or default_ans_id in new_nums:
-            # dev_no für bessere Fehlermeldung finden
-            offenders = []
-            for d in device_new:
-                if d["cmd_id"] == default_cmd_id or d["answer_id"] == default_ans_id:
-                    offenders.append(
-                        f"dev_no={d['dev_no']} CMD={hex(d['cmd_id'])} ANS={hex(d['answer_id'])}"
-                    )
-
-            raise ValueError(
-                "current.default=true: Ziel-IDs dürfen keine Default-ID enthalten "
-                f"(Default CMD={hex(default_cmd_id)} ANS={hex(default_ans_id)}). "
-                "Betroffene Einträge: " + "; ".join(offenders)
-            )
     
     # Case 3: current=false, new=true
     else:  # (not current_default_mode) and new_default_mode
         SN_MODE = False
         if not device_current:
             raise ValueError("current.default=false & new.default=true: devices.config.current.ids darf nicht leer sein.")
-
-        current_nums = _id_numbers(device_current)
-
-        if default_cmd_id in current_nums or default_ans_id in current_nums:
-            raise ValueError(
-                "current.default=false & new.default=true: "
-                "Keine einzelne Default CAN-ID (weder cmd noch ans) "
-                "darf bereits in current.ids vorkommen "
-                f"(Default CMD={hex(default_cmd_id)} "
-                f"ANS={hex(default_ans_id)})."
-            )
         
         dev_nos_for_run = [d["dev_no"] for d in device_current]  # Quelle: current
 

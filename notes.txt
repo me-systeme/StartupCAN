@@ -15,3 +15,25 @@ also ist die verpflichtende serial nicht die lösung.
 ich denke, die lösung ist, dass man vor dem starten des ablaufs nicht erlaubt, dass alle geräte gleichzeitig am bus sind (so wie in case 2). man bearbeitet jedes device nacheinander und wenn das first activate fehlschlägt, nimmt man das device wieder ab, das man gerade angeschlossen hat. dann kann es nur noch passieren, dass das gerade angeschlossene gerät die gleiche can id wie eines der bereits angeschlossenen geräte hat. jetzt stellt sich ja die frage: lassen wir zu, dass (kurzzeitig) max. 2 geräte die gleiche can id am bus haben? oder müssen wir das wegen der kollision auch ausschließen? wenn wir das auch ausschließen müssen, können wir im startupcan eigentlich nur erlauben, dass immer nur ein gerät am bus ist. das wäre ja schon unpraktischer, aber eventuell sicherer. in den can grundlagen steht ja eigentlich, dass die can ids immer eindeutig sein müssen. diese regel möchte ich ungern missachten. was meinst du?
 
 hier https://www.me-systeme.de/de/grundlagen/canbus ist zb von einem eindeutigen identifier die rede.
+
+
+
+
+
+
+
+ok super. durch unsere neue regel: es darf immer nur ein gerät am bus sein, schaue ich mir nochmal die konfigurationsfehler an. ich denke, da kann man ein paar dinge wieder lockern.
+
+in case 2: 
+1. in new ids sind keine default ids erlaubt. können wir weglassen solange alle ids in new.ids eindeutig sind. durch unsere ein-device-regel gibt es nämlich keine kollision mit den anderen default id geräten. es wäre gut, wenn hier die same_ids funktion verwendet wird (wenn schon default --> man muss nichts umstellen)
+
+in case 1:
+1. current ids dürfen doppelt sein, da wir die eine-device-regel haben. new ids müssen aber weiterhin eindeutig bleiben. 
+2. eine can id, die im current bus bereits existiert, darf nicht ziel id für ein geändertes gerät verwendet werden kann weg. wenn alles ok ist, ist das kein problem mehr wegen der eine-device-regel. selbst wenn die umstellung des geräts scheitert, dessen can id für ein anderes gerät verwendet werden soll, und der zustand auf old bleibt während das andere gerät erfolgreich geändert wurde, haben wir in der updated yaml current ids liste zwei geräte mit doppelten can ids. das ist aber nun erlaubt, da wir die regel "current ids dürfen nicht doppelt" sein aufheben wollten. 
+
+in case 3: 
+1. current ids dürfen doppelt sein wegen der eine-device-regel. 
+2. default ids in current liste sind auch erlaubt. Hier könnten man ja auch die same_ids funktion benutzen (wenn schon auf default --> es muss nichts umgestellt werden)
+
+
+es muss nur dann immer gut und genau darauf hingewiesen werden, wann die devices gleichzeitig am bus angeschlossen werden dürfen und wann nicht.
