@@ -525,6 +525,24 @@ def main() -> int:
     
                         continue
                     
+                    # --- SKIP: Ziel ist Default und wir sind bereits auf Default aktiv ---
+                    if _same_ids(DEFAULT_CMD_ID, DEFAULT_ANS_ID, cmd_new, ans_new):
+                        print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs sind DEFAULT. Skip umstellen.")
+
+                        results.append({
+                            "dev_no": dev_no,
+                            "serial": sn,
+                            "ok": True,          # skip ist erfolgreich
+                            "state": "old",      
+                            "cmd_old": DEFAULT_CMD_ID,
+                            "ans_old": DEFAULT_ANS_ID,
+                            "cmd_new": cmd_new,
+                            "ans_new": ans_new,
+                        })
+    
+                        disconnect_reason = "OK (skip). Bitte Gerät abnehmen."
+                        continue
+
                     # optional: verify start
                     ok = _verify_ids(gsv, dev_no, sn, DEFAULT_CMD_ID, DEFAULT_ANS_ID)
 
@@ -592,6 +610,7 @@ def main() -> int:
             if _all_ok(results, len(DEVICE_CONFIG)):
                 print("[INFO] Alle Geräte umgestellt ⇒ dürfen jetzt gleichzeitig an den Bus (IDs eindeutig).")
             else:
+                print("[INFO] Nach dem Run dürfen Geräte nur dann gleichzeitig an den Bus, wenn config.updated.yaml keine doppelten IDs enthält und keine unknown:true Einträge hat.")
                 print("[WARN] Nicht alle Geräte umgestellt ⇒ erst config.updated.yaml prüfen, bevor alle gleichzeitig an den Bus.")
 
             if current_default:
@@ -679,6 +698,23 @@ def main() -> int:
                             disconnect_reason ="Die gelesene Seriennummer stimmt nicht mit der konfigurierten Seriennummer aus dem YAML überein."
                             print("-" * 80)
                             continue
+                    
+                    # --- SKIP: Gerät ist laut current.ids bereits DEFAULT ---
+                    if _same_ids(cmd_start, ans_start, DEFAULT_CMD_ID, DEFAULT_ANS_ID):
+                        print(f"[DEV {dev_no}] current.ids ist bereits DEFAULT und activation OK. Skip reset.")
+
+                        results.append({
+                            "dev_no": dev_no,
+                            "serial": sn,
+                            "ok": True,          # skip ist erfolgreich
+                            "state": "new",      # "old" oder "new" je nachdem was es effektiv ist
+                            "cmd_old": cmd_start,
+                            "ans_old": ans_start,
+                            "cmd_new": DEFAULT_CMD_ID,
+                            "ans_new": DEFAULT_ANS_ID,
+                        })
+                        disconnect_reason = "OK (skip). Gerät ist bereits DEFAULT. Bitte Gerät abnehmen."
+                        continue
 
                     # optional: verify start
                     ok = _verify_ids(gsv, dev_no, sn, cmd_start, ans_start)

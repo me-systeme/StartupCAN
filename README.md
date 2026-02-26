@@ -571,7 +571,7 @@ Diese Validierungen werden unabhängig vom Case geprüft:
 
     Wenn `*.default=true` gilt für die entsprechende CAN ID Liste:
 
-    * Doppelte IDs (default IDs) sind natürlich erlaubt, **aber** pro Gerät bleibt `cmd_id != answer_id` Pflicht.
+    * Doppelte IDs (default IDs oder current IDs) sind erlaubt, **aber** pro Gerät bleibt `cmd_id != answer_id` Pflicht.
 
 * **Default-IDs dürfen nicht identisch sein**
 
@@ -605,13 +605,13 @@ Diese Validierungen werden unabhängig vom Case geprüft:
 
 #### Zweck
 
-* Alle Geräte sind schon mit eindeutigen `current.ids` erreichbar.
+* Alle Geräte sind schon mit (eindeutigen) `current.ids` erreichbar.
 
-* Die Geräte sollen auf eindeutige `new.ids` umgestellt werden.*
+* Die Geräte sollen auf eindeutige `new.ids` umgestellt werden.
 
-* Der Run darf **partial/no-op** sein: einzelne Geräte können unverändert bleiben.*
+* Der Run darf **partial/no-op** sein: einzelne Geräte können unverändert bleiben.
 
-* Sicherheitsregel: Auch wenn die Liste `currrent.ids` eindeutige CAN IDs enthält, können wir nicht wissen, ob diese auch korrekt sind. Daher: Es darf erstmal immer nur jeweils ein Gerät am Bus sein. Wenn man sicher ist, dass die eindeutige Liste korrekt ist (z.B. nach einer bereits erfolgreichen Umstellung) können die Geräte auch gleichzeitig am Bus sein. 
+* **Sicherheitsregel**: Auch wenn die Liste `currrent.ids` eindeutige CAN IDs enthält, können wir nicht wissen, ob diese auch korrekt sind. Daher: Es darf erstmal immer nur jeweils ein Gerät am Bus sein. Wenn man sicher ist, dass die eindeutige Liste korrekt ist (z.B. nach einer bereits erfolgreichen Umstellung) können die Geräte auch gleichzeitig am Bus sein. 
 
 #### Zusätzliche Konfigurationsfehler (Case 1) (Ergänzung zu "Allgemeine Regeln" oben)
 
@@ -670,7 +670,7 @@ Geräte sind (noch) auf Default IDs und müssen **einzeln** umgestellt werden.
 
 #### Erlaubt in Case 2
 
-* ✅ `current.ids` darf leer sein (wird im Wizard-Modus nicht benötigt)
+* ✅ `current.ids` darf leer sein (wird nicht benötigt)
 
 * ✅ `new.ids` kann **ohne** `serial` betrieben werden → Mapping per `dev_no`
 
@@ -693,7 +693,7 @@ Geräte sind (noch) auf Default IDs und müssen **einzeln** umgestellt werden.
 
 * Sobald ein Gerät Default ist, darf es **nicht** am Bus bleiben (sonst ID-Kollision).
 
-* Sicherheitsregel: Auch wenn die Liste `currrent.ids` eindeutige CAN IDs enthält, können wir nicht wissen, ob diese auch korrekt sind. Daher: Es darf erstmal immer nur jeweils ein Gerät am Bus sein. Wenn man sicher ist, dass die eindeutige Liste korrekt ist (z.B. nach einer bereits erfolgreichen Umstellung) können die Geräte auch gleichzeitig am Bus sein. 
+* **Sicherheitsregel**: Auch wenn die Liste `currrent.ids` eindeutige CAN IDs enthält, können wir nicht wissen, ob diese auch korrekt sind. Daher: Es darf erstmal immer nur jeweils ein Gerät am Bus sein. Wenn man sicher ist, dass die eindeutige Liste korrekt ist (z.B. nach einer bereits erfolgreichen Umstellung) können die Geräte auch gleichzeitig am Bus sein. 
 
 
 
