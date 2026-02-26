@@ -25,6 +25,7 @@ from ruamel.yaml import YAML
 
 from startupcan.config import (
     DEVICE_CONFIG,
+    DEVICE_CURRENT,
     DEVICE_NEW,
     CURRENT_DEFAULT_MODE,
     NEW_DEFAULT_MODE,
@@ -51,6 +52,32 @@ IDX_CAN_BAUD       = 4
 # ggf. weitere Settings:
 # IDX_CAN_BAUD      = 2
 # IDX_CAN_FLAGS     = 3
+
+# Track if DLL handle is active per dev_no (best-effort safety vs DLL double-release bug)
+HANDLE_ACTIVE: dict[int, bool] = {}
+
+
+def _set_handle_active(dev_no: int, active: bool):
+    HANDLE_ACTIVE[int(dev_no)] = bool(active)
+
+def _is_handle_active(dev_no: int) -> bool:
+    return bool(HANDLE_ACTIVE.get(int(dev_no), False))
+
+def _safe_release(gsv: GSV86CAN, dev_no: int, *, where: str = ""):
+    """
+    Release only if we believe a valid handle exists.
+    Prevents DLL crash when releasing twice / releasing invalid handle.
+    """
+    if not _is_handle_active(dev_no):
+        return  # nothing to do
+
+    try:
+        gsv.release(dev_no)
+        _set_handle_active(dev_no, False)
+        time.sleep(0.05)
+    except Exception as e:
+        # If release fails, don't flip state blindly; keep it as-is
+        print(f"[DEV {dev_no}] WARN: release failed{(' @'+where) if where else ''}: {e}")
 
 
 def fmt_can_id(x: int) -> str:
@@ -96,6 +123,11 @@ def _new_ids_for(dev_no: int) -> tuple[int, int]:
 def _pause(msg: str):
     print(msg)
     input("➡️  ENTER drücken, um fortzufahren ... ")
+
+def _ask_continue(prompt: str = "[WIZARD] Nächstes Gerät bearbeiten? [j/N]: ") -> bool:
+    more = input(prompt).strip().lower()
+    return more in ("j", "ja", "y", "yes")
+
 
 def _read_serial(gsv: GSV86CAN, dev_no: int) -> int | None:
     try:
@@ -173,7 +205,7 @@ def _set_ids_reset_reactivate_verify_release(
         time.sleep(2)
 
         # Session lösen
-        gsv.release(dev_no)
+        _safe_release(gsv, dev_no, where="after reset")
         time.sleep(0.2)
 
         ok, sn2 = _try_activate(gsv, dev_no, cmd_new, ans_new, tries=8, delay=0.5, read_sn=True)
@@ -188,18 +220,13 @@ def _set_ids_reset_reactivate_verify_release(
             print(f"[{_fmt_dev(dev_no, sn_out)}] WARN: Verify nach Re-Activate stimmt nicht "
                   f"(expected CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)}).")
 
-        # Wichtig: wieder lösen (du willst danach nichts mehr damit machen)
-        gsv.release(dev_no)
         time.sleep(0.1)
 
         return ok_verify, sn_out
     
     except Exception as e:
         print(f"[{_fmt_dev(dev_no, serial)}] set/reset/reactivate/verify/release FAIL: {e}")
-        try:
-            gsv.release(dev_no)
-        except Exception:
-            pass
+        _safe_release(gsv, dev_no, where="set_ids:except")
         return False, serial
     
 def _print_summary(rows: list[dict]):
@@ -269,6 +296,52 @@ def _effective_current_ids_from_results(results: list[dict]) -> list[dict]:
     out.sort(key=lambda d: d["dev_no"])
     return out
 
+def _merge_current_ids(
+    original_current: list[dict],
+    updated_subset: list[dict],
+    *,
+    keep_unknown_flags: bool = True,
+) -> list[dict]:
+    """
+    Merged current.ids:
+    - updated_subset überschreibt die Einträge aus original_current für gleiche dev_no
+    - dev_no die nicht in updated_subset sind bleiben wie original_current
+    - dev_no die neu sind (in updated_subset aber nicht original_current) werden ergänzt
+    """
+    by_dev: dict[int, dict] = {}
+
+    # 1) Original übernehmen
+    for d in (original_current or []):
+        dn = int(d["dev_no"])
+        by_dev[dn] = dict(d)
+
+    # 2) Updates drüberbügeln
+    for u in (updated_subset or []):
+        dn = int(u["dev_no"])
+        merged = dict(by_dev.get(dn, {}))
+
+        merged["dev_no"] = dn
+        merged["cmd_id"] = int(u["cmd_id"])
+        merged["answer_id"] = int(u["answer_id"])
+
+        # serial nur setzen, wenn geliefert
+        if u.get("serial") is not None:
+            merged["serial"] = int(u["serial"])
+
+        # unknown nur wenn erlaubt/geliefert
+        if keep_unknown_flags:
+            if u.get("unknown"):
+                merged["unknown"] = True
+            else:
+                merged.pop("unknown", None)
+
+        by_dev[dn] = merged
+
+    out = list(by_dev.values())
+    out.sort(key=lambda x: int(x["dev_no"]))
+    return out
+
+
 
 def _finish_device_step(gsv: GSV86CAN, dev_no: int, serial: int | None, reason: str = ""):
     """
@@ -278,12 +351,7 @@ def _finish_device_step(gsv: GSV86CAN, dev_no: int, serial: int | None, reason: 
     if reason:
         print(f"[{tag}] {reason}")
 
-    # best-effort release (nicht hart failen)
-    try:
-        gsv.release(dev_no)
-        time.sleep(0.1)
-    except Exception:
-        pass
+    _safe_release(gsv, dev_no, where="finish_device_step")
 
     _pause(f"➡️  Bitte dieses Gerät {tag} JETZT vom Bus abnehmen/abschrauben, dann ENTER ...")
 
@@ -306,16 +374,14 @@ def _try_activate(
     Gibt (ok, serial) zurück.
     """
     last_err = None
-    # try:
-    #     gsv.release(dev_no)
-    # except Exception:
-    #     pass
+    
 
     for i in range(tries):
         if verbose:
             print(f"[DEV {dev_no}] activate try {i+1}/{tries}: CMD={fmt_can_id(cmd)} ANS={fmt_can_id(ans)}")
         try:
             gsv.activate(dev_no, cmd, ans)
+            _set_handle_active(dev_no, True)
             # sn = None
             sn = _read_serial(gsv, dev_no) if read_sn else None
             if verbose: 
@@ -345,24 +411,21 @@ def _probe_state_after_fail(
     Returns: "old" | "new" | "unknown"
     """
 
-    try:
-        gsv.release(dev_no)
-    except Exception:
-        pass
+    _safe_release(gsv, dev_no, where="probe:pre")
     time.sleep(0.3)  
 
     # 1) old testen
+    # cmd_old = 514
+    # ans_old = 515
     ok_old = _try_activate_n(gsv, dev_no, cmd_old, ans_old)
     if ok_old:
-        try: gsv.release(dev_no)
-        except Exception: pass
+        _safe_release(gsv, dev_no, where="probe:old-ok")
         return "old"
 
     # 2) new testen
     ok_new = _try_activate_n(gsv, dev_no, cmd_new, ans_new)
     if ok_new:
-        try: gsv.release(dev_no)
-        except Exception: pass
+        _safe_release(gsv, dev_no, where="probe:new-ok")
         return "new"
 
     return "unknown"
@@ -471,7 +534,7 @@ def main() -> int:
                 _connect_one(dev_no)
 
                 sn = None
-
+                skip_programming = False
                 disconnect_reason = "Weiter mit nächstem Gerät."
 
                 try: 
@@ -498,103 +561,108 @@ def main() -> int:
                             "cmd_new": cmd_new,
                             "ans_new": ans_new,
                         })
+                        skip_programming = True
                         disconnect_reason = f"Aktivierung (DEFAULT) fehlgeschlagen. State probe={state}. Gerät abnehmen."
-                        continue
-                    
-                    try:
-                        cmd_new, ans_new = _target_ids(dev_no, sn)
-                        if SN_MODE:
-                            print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs per SN-Mapping.")
-                        else:
-                            print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs per dev_no-Mapping.")
-                    except KeyError as e:
-                        print(f"[{_fmt_dev(dev_no, sn)}] FEHLER: {e}")
+                        
+                    if not skip_programming:
+                        try:
+                            cmd_new, ans_new = _target_ids(dev_no, sn)
+                            if SN_MODE:
+                                print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs per SN-Mapping.")
+                            else:
+                                print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs per dev_no-Mapping.")
+                        except KeyError as e:
+                            print(f"[{_fmt_dev(dev_no, sn)}] FEHLER: {e}")
+
+                            results.append({
+                                "dev_no": dev_no,
+                                "serial": sn,
+                                "ok": False,
+                                "cmd_old": DEFAULT_CMD_ID,
+                                "ans_old": DEFAULT_ANS_ID,
+                                "cmd_new": DEFAULT_CMD_ID,
+                                "ans_new": DEFAULT_ANS_ID,
+                            })
+                            skip_programming = True
+                            disconnect_reason = "FEHLER: Ziel-IDs konnten nicht bestimmt werden. Dieses Gerät wird übersprungen."
+                
+        
+                            
+                    if not skip_programming:
+                        # --- SKIP: Ziel ist Default und wir sind bereits auf Default aktiv ---
+                        if _same_ids(DEFAULT_CMD_ID, DEFAULT_ANS_ID, cmd_new, ans_new):
+                            print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs sind DEFAULT. Skip umstellen.")
+
+                            results.append({
+                                "dev_no": dev_no,
+                                "serial": sn,
+                                "ok": True,          # skip ist erfolgreich
+                                "state": "old",      
+                                "cmd_old": DEFAULT_CMD_ID,
+                                "ans_old": DEFAULT_ANS_ID,
+                                "cmd_new": cmd_new,
+                                "ans_new": ans_new,
+                            })
+                            skip_programming = True
+                            disconnect_reason = "OK (skip). Bitte Gerät abnehmen."
+                            
+                    if not skip_programming:
+                        # optional: verify start
+                        ok = _verify_ids(gsv, dev_no, sn, DEFAULT_CMD_ID, DEFAULT_ANS_ID)
+
+                        if not ok:
+                            print(f"[{_fmt_dev(dev_no, sn)}] WARN: Start-IDs stimmen nicht (trotz activation).")
+
+                        ok2, sn2 = _set_ids_reset_reactivate_verify_release(gsv, dev_no, sn, cmd_new, ans_new)
+
+                        if sn2 is not None:
+                            sn = sn2
+
+
+                        state = "new" if ok2 else _probe_state_after_fail(
+                            gsv, dev_no,
+                            DEFAULT_CMD_ID, DEFAULT_ANS_ID,
+                            cmd_new, ans_new
+                        )
 
                         results.append({
                             "dev_no": dev_no,
-                            "serial": sn,
-                            "ok": False,
-                            "cmd_old": DEFAULT_CMD_ID,
-                            "ans_old": DEFAULT_ANS_ID,
-                            "cmd_new": DEFAULT_CMD_ID,
-                            "ans_new": DEFAULT_ANS_ID,
-                        })
-
-                        disconnect_reason = "FEHLER: Ziel-IDs konnten nicht bestimmt werden. Dieses Gerät wird übersprungen."
-            
-    
-                        continue
-                    
-                    # --- SKIP: Ziel ist Default und wir sind bereits auf Default aktiv ---
-                    if _same_ids(DEFAULT_CMD_ID, DEFAULT_ANS_ID, cmd_new, ans_new):
-                        print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs sind DEFAULT. Skip umstellen.")
-
-                        results.append({
-                            "dev_no": dev_no,
-                            "serial": sn,
-                            "ok": True,          # skip ist erfolgreich
-                            "state": "old",      
+                            "serial": sn2 if sn2 is not None else sn,
+                            "ok": bool(ok2),
+                            "state": state,
                             "cmd_old": DEFAULT_CMD_ID,
                             "ans_old": DEFAULT_ANS_ID,
                             "cmd_new": cmd_new,
                             "ans_new": ans_new,
                         })
-    
-                        disconnect_reason = "OK (skip). Bitte Gerät abnehmen."
-                        continue
 
-                    # optional: verify start
-                    ok = _verify_ids(gsv, dev_no, sn, DEFAULT_CMD_ID, DEFAULT_ANS_ID)
+                        if ok2:
+                            print(f"[WIZARD] ✅ {_fmt_dev(dev_no, sn2)} umgestellt.")
 
-                    if not ok:
-                        print(f"[{_fmt_dev(dev_no, sn)}] WARN: Start-IDs stimmen nicht (trotz activation).")
+                            disconnect_reason = "OK. Bitte Gerät abnehmen (Safety: immer nur eins am Bus)."
+                            
 
-                    ok2, sn2 = _set_ids_reset_reactivate_verify_release(gsv, dev_no, sn, cmd_new, ans_new)
-
-                    if sn2 is not None:
-                        sn = sn2
-
-
-                    state = "new" if ok2 else _probe_state_after_fail(
-                        gsv, dev_no,
-                        DEFAULT_CMD_ID, DEFAULT_ANS_ID,
-                        cmd_new, ans_new
-                    )
-
-                    results.append({
-                        "dev_no": dev_no,
-                        "serial": sn2 if sn2 is not None else sn,
-                        "ok": bool(ok2),
-                        "state": state,
-                        "cmd_old": DEFAULT_CMD_ID,
-                        "ans_old": DEFAULT_ANS_ID,
-                        "cmd_new": cmd_new,
-                        "ans_new": ans_new,
-                    })
-
-                    if ok2:
-                        print(f"[WIZARD] ✅ {_fmt_dev(dev_no, sn2)} umgestellt.")
-
-                        disconnect_reason = "OK. Bitte Gerät abnehmen (Safety: immer nur eins am Bus)."
+                        else:
+                            # bei Fail willst du ziemlich sicher: Gerät abnehmen (weil Zustand unklar / evtl Default)
+                            disconnect_reason = "FEHLER: Umstellung fehlgeschlagen."
                         
-
-                    else:
-                        # bei Fail willst du ziemlich sicher: Gerät abnehmen (weil Zustand unklar / evtl Default)
-                        disconnect_reason = "FEHLER: Umstellung fehlgeschlagen."
-                        
-                
-                        continue
-
-                    more = input("[WIZARD] Nächstes Gerät umstellen? [j/N]: ").strip().lower()
-                    if more not in ("j", "ja", "y", "yes"):
-                        break
                 finally:
                     
                     _disconnect_one(gsv, dev_no, sn, reason=disconnect_reason)
 
+                if not _ask_continue("[WIZARD] Nächstes Gerät umstellen? [j/N]: "):
+                    break
+
             _print_summary(results)
-            current_ids = _effective_current_ids_from_results(results)
-            current_default = _all_fail(results, len(DEVICE_CONFIG)) 
+            updated_subset = _effective_current_ids_from_results(results)
+
+            # original_current kommt aus YAML current.ids
+            original_current = DEVICE_CURRENT or []
+
+            current_ids = _merge_current_ids(original_current, updated_subset)
+
+            # current_default bleibt wie gehabt (deine Logik)
+            current_default = _all_fail(results, len(DEVICE_CONFIG))
 
             all_ok = _all_ok(results, len(DEVICE_CONFIG))
             dst = Path(CONFIG_PATH).with_name("config.updated.yaml")
@@ -634,6 +702,7 @@ def main() -> int:
                 _connect_one(dev_no)
 
                 sn = None
+                skip_programming = False
 
                 disconnect_reason = "Weiter mit nächstem Gerät."
 
@@ -655,104 +724,114 @@ def main() -> int:
                             "cmd_new": DEFAULT_CMD_ID,
                             "ans_new": DEFAULT_ANS_ID,
                         })
-
+                        skip_programming = True
                         disconnect_reason = f"Aktivierung (current IDs) fehlgeschlagen. State probe={state}. Gerät abnehmen."
-                        continue
+                        
                     
                     # Wenn current.ids serial angibt: muss matchen (und muss lesbar sein)
                     if expected_sn is not None:
-                        if sn is None:
-                            print(
-                                f"[DEV {dev_no}] FEHLER: YAML erwartet SN={expected_sn}, "
-                                "aber Seriennummer konnte nicht gelesen werden. => Device wird NICHT umgestellt."
-                            )
+                        if not skip_programming:
+                            if sn is None:
+                                print(
+                                    f"[DEV {dev_no}] FEHLER: YAML erwartet SN={expected_sn}, "
+                                    "aber Seriennummer konnte nicht gelesen werden. => Device wird NICHT umgestellt."
+                                )
+                                results.append({
+                                    "dev_no": dev_no,
+                                    "serial": sn,
+                                    "ok": False,
+                                    "cmd_old": cmd_start,
+                                    "ans_old": ans_start,
+                                    "cmd_new": cmd_new,
+                                    "ans_new": ans_new,
+                                })
+                                skip_programming = True
+                                disconnect_reason ="Die Seriennummer konnte nicht gelesen werden."
+                                print("-" * 80)
+                                
+                        if not skip_programming:
+                            if int(expected_sn) != int(sn):
+                                print(
+                                    f"[{_fmt_dev(dev_no, sn)}] FEHLER: Seriennummer passt nicht zu YAML current.ids "
+                                    f"(yaml SN={expected_sn}). => Device wird NICHT umgestellt."
+                                )
+                                results.append({
+                                    "dev_no": dev_no,
+                                    "serial": sn,
+                                    "ok": False,
+                                    "cmd_old": cmd_start,
+                                    "ans_old": ans_start,
+                                    "cmd_new": cmd_new,
+                                    "ans_new": ans_new,
+                                })
+                                skip_programming = True
+                                disconnect_reason ="Die gelesene Seriennummer stimmt nicht mit der konfigurierten Seriennummer aus dem YAML überein."
+                                print("-" * 80)
+                                
+                    if not skip_programming:
+                        # --- SKIP: Gerät ist laut current.ids bereits DEFAULT ---
+                        if _same_ids(cmd_start, ans_start, DEFAULT_CMD_ID, DEFAULT_ANS_ID):
+                            print(f"[DEV {dev_no}] current.ids ist bereits DEFAULT und activation OK. Skip reset.")
+
                             results.append({
                                 "dev_no": dev_no,
                                 "serial": sn,
-                                "ok": False,
+                                "ok": True,          # skip ist erfolgreich
+                                "state": "new",      # "old" oder "new" je nachdem was es effektiv ist
                                 "cmd_old": cmd_start,
                                 "ans_old": ans_start,
-                                "cmd_new": cmd_new,
-                                "ans_new": ans_new,
+                                "cmd_new": DEFAULT_CMD_ID,
+                                "ans_new": DEFAULT_ANS_ID,
                             })
+                            skip_programming = True
+                            disconnect_reason = "OK (skip). Gerät ist bereits DEFAULT. Bitte Gerät abnehmen."
                             
-                            disconnect_reason ="Die Seriennummer konnte nicht gelesen werden."
-                            print("-" * 80)
-                            continue
+                    if not skip_programming:
+                        # optional: verify start
+                        ok = _verify_ids(gsv, dev_no, sn, cmd_start, ans_start)
 
-                        if int(expected_sn) != int(sn):
-                            print(
-                                f"[{_fmt_dev(dev_no, sn)}] FEHLER: Seriennummer passt nicht zu YAML current.ids "
-                                f"(yaml SN={expected_sn}). => Device wird NICHT umgestellt."
-                            )
-                            results.append({
-                                "dev_no": dev_no,
-                                "serial": sn,
-                                "ok": False,
-                                "cmd_old": cmd_start,
-                                "ans_old": ans_start,
-                                "cmd_new": cmd_new,
-                                "ans_new": ans_new,
-                            })
+                        if not ok:
+                            print(f"[{_fmt_dev(dev_no, sn)}] WARN: Start-IDs stimmen nicht (trotz activation).")
 
-                            disconnect_reason ="Die gelesene Seriennummer stimmt nicht mit der konfigurierten Seriennummer aus dem YAML überein."
-                            print("-" * 80)
-                            continue
-                    
-                    # --- SKIP: Gerät ist laut current.ids bereits DEFAULT ---
-                    if _same_ids(cmd_start, ans_start, DEFAULT_CMD_ID, DEFAULT_ANS_ID):
-                        print(f"[DEV {dev_no}] current.ids ist bereits DEFAULT und activation OK. Skip reset.")
+                        # 2-5) set default, reset, release, reactivate default, verify, release
+                        ok2, sn2 = _set_ids_reset_reactivate_verify_release(gsv, dev_no, sn, cmd_new, ans_new)
+
+                        if sn2 is not None:
+                            sn = sn2
+
+                        state = "new" if ok2 else _probe_state_after_fail(
+                            gsv, dev_no,
+                            cmd_start, ans_start,
+                            cmd_new, ans_new
+                        )
 
                         results.append({
-                            "dev_no": dev_no,
-                            "serial": sn,
-                            "ok": True,          # skip ist erfolgreich
-                            "state": "new",      # "old" oder "new" je nachdem was es effektiv ist
-                            "cmd_old": cmd_start,
-                            "ans_old": ans_start,
-                            "cmd_new": DEFAULT_CMD_ID,
-                            "ans_new": DEFAULT_ANS_ID,
+                            "dev_no": dev_no, "serial": sn2 if sn2 is not None else sn,
+                            "ok": bool(ok2), "state": state,
+                            "cmd_old": cmd_start, "ans_old": ans_start,
+                            "cmd_new": cmd_new, "ans_new": ans_new,
                         })
-                        disconnect_reason = "OK (skip). Gerät ist bereits DEFAULT. Bitte Gerät abnehmen."
-                        continue
 
-                    # optional: verify start
-                    ok = _verify_ids(gsv, dev_no, sn, cmd_start, ans_start)
-
-                    if not ok:
-                        print(f"[{_fmt_dev(dev_no, sn)}] WARN: Start-IDs stimmen nicht (trotz activation).")
-
-                    # 2-5) set default, reset, release, reactivate default, verify, release
-                    ok2, sn2 = _set_ids_reset_reactivate_verify_release(gsv, dev_no, sn, cmd_new, ans_new)
-
-                    if sn2 is not None:
-                        sn = sn2
-
-                    state = "new" if ok2 else _probe_state_after_fail(
-                        gsv, dev_no,
-                        cmd_start, ans_start,
-                        cmd_new, ans_new
-                    )
-
-                    results.append({
-                        "dev_no": dev_no, "serial": sn2 if sn2 is not None else sn,
-                        "ok": bool(ok2), "state": state,
-                        "cmd_old": cmd_start, "ans_old": ans_start,
-                        "cmd_new": cmd_new, "ans_new": ans_new,
-                    })
-
-                    if ok2:
-                        disconnect_reason = "OK: Gerät ist jetzt DEFAULT. Bitte abnehmen."
-                    else:
-                        disconnect_reason = f"FEHLER: Reset auf DEFAULT fehlgeschlagen (state={state}). Bitte abnehmen."
+                        if ok2:
+                            disconnect_reason = "OK: Gerät ist jetzt DEFAULT. Bitte abnehmen."
+                        else:
+                            disconnect_reason = f"FEHLER: Reset auf DEFAULT fehlgeschlagen (state={state}). Bitte abnehmen."
 
                     
                     
                 finally:
                     _disconnect_one(gsv, dev_no, sn, reason=disconnect_reason)
 
+                if not _ask_continue("[WIZARD] Nächstes Gerät auf DEFAULT setzen? [j/N]: "):
+                    break
+
             _print_summary(results)
-            current_ids = _effective_current_ids_from_results(results)
+            updated_subset = _effective_current_ids_from_results(results)
+
+            # In Case 3 ist DEVICE_CONFIG = YAML current.ids (bei dir so)
+            original_current = DEVICE_CONFIG or []
+
+            current_ids = _merge_current_ids(original_current, updated_subset)
             current_default = _all_ok(results, len(DEVICE_CONFIG))  # nur wenn ALLE wirklich default sind
 
             all_ok = _all_ok(results, len(DEVICE_CONFIG))
@@ -797,6 +876,8 @@ def main() -> int:
 
                 sn = None
 
+                skip_programming = False
+
                 disconnect_reason = "Weiter mit nächstem Gerät."
 
                 try: 
@@ -819,97 +900,109 @@ def main() -> int:
                             "ans_new": ans_new,
                         })
 
+                        skip_programming = True
                         disconnect_reason = f"Activation failed. State probe={state}. Gerät abnehmen."
-                        continue
+                        
                     
                     if expected_sn is not None:
-                        if sn is None:
-                            print(
-                                f"[DEV {dev_no}] FEHLER: YAML erwartet SN={expected_sn}, "
-                                "aber Seriennummer konnte nicht gelesen werden. => Device wird NICHT umgestellt."
-                            )
+                        if not skip_programming:
+                            if sn is None:
+                                print(
+                                    f"[DEV {dev_no}] FEHLER: YAML erwartet SN={expected_sn}, "
+                                    "aber Seriennummer konnte nicht gelesen werden. => Device wird NICHT umgestellt."
+                                )
+                                results.append({
+                                    "dev_no": dev_no,
+                                    "serial": sn,
+                                    "ok": False,
+                                    "cmd_old": cmd_id,
+                                    "ans_old": ans_id,
+                                    "cmd_new": cmd_new,
+                                    "ans_new": ans_new,
+                                })
+
+                                skip_programming = True
+                                disconnect_reason = "Die Seriennummer konnte nicht gelesen werden."
+                                print("-" * 80)
+
+                        if not skip_programming:
+                            if int(expected_sn) != int(sn):
+                                print(
+                                    f"[{_fmt_dev(dev_no, sn)}] FEHLER: Seriennummer passt nicht zu YAML current.ids "
+                                    f"(yaml SN={expected_sn}). => Device wird NICHT umgestellt."
+                                )
+                                results.append({
+                                    "dev_no": dev_no,
+                                    "serial": sn,
+                                    "ok": False,
+                                    "cmd_old": cmd_id,
+                                    "ans_old": ans_id,
+                                    "cmd_new": cmd_new,
+                                    "ans_new": ans_new,
+                                })
+                                skip_programming = True
+                                disconnect_reason = "Die gelesene Seriennummer stimmt nicht mit der konfigurierten Seriennummer aus dem YAML überein."
+                                print("-" * 80)
+                                
+                    if not skip_programming:
+                        # Optional: prüfen
+                        ok = _verify_ids(gsv, dev_no, sn, cmd_id, ans_id)
+
+                        if not ok:
+                            print(f"[{_fmt_dev(dev_no, sn)}] WARN: Start-IDs stimmen nicht (trotz activation).")
+
+                        if _same_ids(cmd_id, ans_id, cmd_new, ans_new):
+                            print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs == aktuelle YAML-IDs. Skip reprogram/reset.")
                             results.append({
                                 "dev_no": dev_no,
                                 "serial": sn,
-                                "ok": False,
+                                "ok": True,
+                                "state": "new",     # effektiv "already new"
                                 "cmd_old": cmd_id,
                                 "ans_old": ans_id,
                                 "cmd_new": cmd_new,
                                 "ans_new": ans_new,
                             })
+                            skip_programming = True
+                            disconnect_reason = "OK (skip). Bitte Gerät abnehmen."
+                            print("-" * 80)
                             
-                            disconnect_reason = "Die Seriennummer konnte nicht gelesen werden."
-                            print("-" * 80)
-                            continue
+                    if not skip_programming:
+                        ok2, sn2 = _set_ids_reset_reactivate_verify_release(gsv, dev_no, sn, cmd_new, ans_new)
+                        
+                        if sn2 is not None:
+                            sn = sn2
 
-                        if int(expected_sn) != int(sn):
-                            print(
-                                f"[{_fmt_dev(dev_no, sn)}] FEHLER: Seriennummer passt nicht zu YAML current.ids "
-                                f"(yaml SN={expected_sn}). => Device wird NICHT umgestellt."
-                            )
-                            results.append({
-                                "dev_no": dev_no,
-                                "serial": sn,
-                                "ok": False,
-                                "cmd_old": cmd_id,
-                                "ans_old": ans_id,
-                                "cmd_new": cmd_new,
-                                "ans_new": ans_new,
-                            })
+                        state = "new" if ok2 else _probe_state_after_fail(gsv, dev_no, cmd_id, ans_id, cmd_new, ans_new)
 
-                            disconnect_reason = "Die gelesene Seriennummer stimmt nicht mit der konfigurierten Seriennummer aus dem YAML überein."
-                            print("-" * 80)
-                            continue
-
-                    # Optional: prüfen
-                    ok = _verify_ids(gsv, dev_no, sn, cmd_id, ans_id)
-
-                    if not ok:
-                        print(f"[{_fmt_dev(dev_no, sn)}] WARN: Start-IDs stimmen nicht (trotz activation).")
-
-                    if _same_ids(cmd_id, ans_id, cmd_new, ans_new):
-                        print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs == aktuelle YAML-IDs. Skip reprogram/reset.")
                         results.append({
                             "dev_no": dev_no,
-                            "serial": sn,
-                            "ok": True,
-                            "state": "new",     # effektiv "already new"
+                            "serial": sn2 if sn2 is not None else sn,
+                            "ok": bool(ok2),
+                            "state": state,
                             "cmd_old": cmd_id,
                             "ans_old": ans_id,
                             "cmd_new": cmd_new,
                             "ans_new": ans_new,
                         })
-                    
-                        disconnect_reason = "OK (skip). Bitte Gerät abnehmen."
                         print("-" * 80)
-                        continue
 
-                    ok2, sn2 = _set_ids_reset_reactivate_verify_release(gsv, dev_no, sn, cmd_new, ans_new)
-                    
-                    if sn2 is not None:
-                        sn = sn2
-
-                    state = "new" if ok2 else _probe_state_after_fail(gsv, dev_no, cmd_id, ans_id, cmd_new, ans_new)
-
-                    results.append({
-                        "dev_no": dev_no,
-                        "serial": sn2 if sn2 is not None else sn,
-                        "ok": bool(ok2),
-                        "state": state,
-                        "cmd_old": cmd_id,
-                        "ans_old": ans_id,
-                        "cmd_new": cmd_new,
-                        "ans_new": ans_new,
-                    })
-                    print("-" * 80)
-
-                    disconnect_reason = "Weiter mit nächstem Gerät."
+                        disconnect_reason = "Weiter mit nächstem Gerät."
                 finally:
                     _disconnect_one(gsv, dev_no, sn, reason=disconnect_reason)
+                
+                if not _ask_continue("[WIZARD] Nächstes Gerät bearbeiten? [j/N]: "):
+                    break
 
 
             _print_summary(results)
-            current_ids = _effective_current_ids_from_results(results)
+
+            updated_subset = _effective_current_ids_from_results(results)
+
+            # In Case 1 ist DEVICE_CONFIG = YAML current.ids (bei dir so)
+            original_current = DEVICE_CONFIG or []
+
+            current_ids = _merge_current_ids(original_current, updated_subset)
             current_default = False
 
             all_ok = _all_ok(results, len(DEVICE_CONFIG))
@@ -936,6 +1029,8 @@ def main() -> int:
             gsv.release(0)
         except Exception:
             pass
+        finally:
+            HANDLE_ACTIVE.clear()  
 
 
 if __name__ == "__main__":

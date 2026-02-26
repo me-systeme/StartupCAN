@@ -37,3 +37,16 @@ in case 3:
 
 
 es muss nur dann immer gut und genau darauf hingewiesen werden, wann die devices gleichzeitig am bus angeschlossen werden dürfen und wann nicht.
+
+
+
+
+
+[DEV 2] activate try 1/5: CMD=0x100 ANS=0x101
+[DEV 2] activate try 2/5: CMD=0x100 ANS=0x101
+[DEV 2] activate try 3/5: CMD=0x100 ANS=0x101
+[DEV 2] activate try 4/5: CMD=0x100 ANS=0x101
+[DEV 2] activate try 5/5: CMD=0x100 ANS=0x101
+[DEV 2] activate FAIL after 5 tries: GSV86DLL: invalid devicehandle [805306625] (Code=805306625)
+
+passiert immer nachdem ein device erfolgreich umgestellt wurde

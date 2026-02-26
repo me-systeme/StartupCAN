@@ -1,22 +1,24 @@
 # StartupCAN
 
-## Case 1 – Multi-Device Update (`current.default=false`, `new.default=false`)
+## Case 1 – Device Update (`current.default=false`, `new.default=false`)
 
 ```mermaid
 flowchart TD
   A["Start: Device aus current.ids"] --> B["1. Activate mit current IDs"]
 
-  B -->|FAIL| F1["FAIL#1<br/>Activate fehlgeschlagen<br/>→ keine Umstellung<br/>→ current bleibt alt"]
+  B -->|FAIL| P
   B -->|OK| C["2. Serial-Check<br/>nur wenn serial in current.ids"]
 
-  C -->|FAIL| F2["FAIL#2<br/>Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine Umstellung"]
+  C -->|FAIL| F2["Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine Umstellung"]
   C -->|OK| D["3. Read CAN Settings<br/>(best-effort)"]
 
-  D -->|Warnung| E
-  D -->|OK| E["4. Set new IDs<br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
-
-  E -->|OK| S["SUCCESS<br/>current.ids = new IDs"]
-  E -->|FAIL| P["FAIL#4<br/>State-Probe<br/>old / new / unknown"]
+  D -->|OK/ not OK| E["4. Check <br/>Same IDs?"]
+  
+  E -->|No| F["5. Set new IDs<br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
+  E -->|Yes| F3["SUCCESS<br/>current.ids = new.ids"]
+  
+  F -->|FAIL| P["State-Probe<br/>old / new / unknown"]
+  F -->|OK| S["SUCCESS<br/>current.ids = new.ids"]
 
   P -->|old| O["current.ids bleibt alt"]
   P -->|new| N["current.ids = new IDs"]
@@ -24,19 +26,19 @@ flowchart TD
 
 ``` 
 
-In diesem Modus dürfen **alle Geräte gleichzeitig am CAN-Bus** betrieben werden, weil `devices.config.current.ids` eindeutige CAN-IDs enthält. Jedes Gerät wird nacheinander:
+In diesem Modus werden (eindeutige) CAN IDs auf neue eindeutige CAN IDs umgestellt. Zur Sicherheit darf immer nur ein Gerät gleichzeitig am Bus sein. Es wird per `dev_no` gemappt. Jedes Gerät wird nacheinander:
 
-1. mit den **current IDs** aktiviert,
+* mit den **current IDs** aktiviert,
 
-2. optional geprüft (Seriennummer / CAN-Settings),
+* optional geprüft (Seriennummer / CAN-Settings),
 
-3. auf die **new IDs** umgestellt,
+* auf die **new IDs** umgestellt,
 
-4. per Reset/Release/Re-Activate verifiziert,
+* per Reset/Release/Re-Activate verifiziert,
 
-5. danach wieder released,
+* danach wieder released,
 
-6. und am Ende wird eine **config.updated.yaml** geschrieben, die den Ist-Zustand abbildet.
+* und am Ende wird eine **config.updated.yaml** geschrieben, die den Ist-Zustand abbildet.
 
 ### **Ablauf / Reihenfolge (pro Device)**
 
@@ -87,11 +89,23 @@ A["3. Read CAN Settings<br/>(best-effort)"]
 **Wichtig:** Auch wenn Schritt 3 fehlschlägt, geht es **trotzdem weiter** zu Schritt **4**.
 
 
-**Schritt 4 – Set IDs → Reset → Release → Re-Activate → Verify → Release**
+***Schritt 4 - Check same IDs**
 
 ```mermaid
 flowchart TD
-A["4. Set new IDs<br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
+A["4. Check <br/>Same IDs?"]
+```
+
+Falls das Gerät bereits die neuen IDs besitzt, wird das Gerät übersprungen. 
+
+Wenn nicht, geht es weiter mit Schritt **5**.
+
+
+**Schritt 5 – Set IDs → Reset → Release → Re-Activate → Verify → Release**
+
+```mermaid
+flowchart TD
+A["5. Set new IDs<br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
 ``` 
 
 * `set_can_settings(CANSET_CAN_IN_CMD_ID, cmd_new)`
@@ -108,9 +122,9 @@ A["4. Set new IDs<br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
 
 * abschließendes `release()`
 
-Wenn Schritt 4 erfolgreich ist → Device gilt als **OK / umgestellt**.
+Wenn Schritt 5 erfolgreich ist → Device gilt als **OK / umgestellt**.
 
-Wenn Schritt 4 fehlschlägt → es wird eine **Zustandsprobe** durchgeführt (old/new/unknown) und entsprechend in `config.updated.yaml` eingetragen (siehe Fehlerfall **4**).
+Wenn Schritt 5 fehlschlägt → es wird eine **Zustandsprobe** durchgeführt (old/new/unknown) und entsprechend in `config.updated.yaml` eingetragen (siehe Fehlerfall **4**).
 
 
 
@@ -120,30 +134,43 @@ Wenn Schritt 4 fehlschlägt → es wird eine **Zustandsprobe** durchgeführt (ol
 
 ```mermaid
 flowchart TD
-A["FAIL#1<br/>Activate fehlgeschlagen<br/>→ keine Umstellung<br/>→ current bleibt alt"]
+A["State-Probe<br/>old / new / unknown"]
 ```
 
 **Symptom:** activate funktioniert nicht (Timeout/249/…); keine aktive Session.
 
 **Aktion:**
 
-* Gerät wird **nicht umgestellt.**
+* Gerät wird **nicht umgestellt**.
 
-* Gerät darf am Bus bleiben.
+* Danach wird “Best-Effort” geprüft, welche IDs tatsächlich aktiv sind:
 
-* Ein `release()` ist nicht notwendig (weil keine aktive Session aufgebaut wurde; optional kann man trotzdem “best-effort” releasen, aber nicht nötig).
+    * **state = "old"** → Gerät besitzt sehr wahrscheinlich die konfigurierten IDs in `current.ids`. Das erste activate hat nicht geklappt. Jetzt klappt es aber. 
 
-**YAML-Update:**
+    * **state = "new"** → Gerät ist sehr wahrscheinlich bereits auf neuen IDs
 
-* In `current.ids` bleiben die bisherigen IDs (aus YAML) für dieses Gerät erhalten.
+    * **state = "unknown"** → weder old noch new konnte aktiviert werden
 
-* `new.ids` bleibt unverändert (Ziel bleibt weiter bestehen).
+* Gerät muss zur Sicherheit vom Bus genommen werden.
+
+**YAML-Update** (`config.updated.yaml`) **abhängig vom state**:
+
+* **state="old"** → `current.ids` bleibt auf alten IDs
+
+* **state="new"** → `current.ids` wird auf neue IDs gesetzt
+
+* **state="unknown"** → `current.ids` bleibt auf alten IDs **und** `unknown: true` wird gesetzt (als Warnflag)
+
+* `new.ids` bleibt unverändert (Ziel bleibt bestehen)
+
+
+
 
 **2. Serial-Check (Step 2) schlägt fehl (nur wenn serial: in current.ids gesetzt ist)**
 
 ```mermaid
 flowchart TD
-A["FAIL#2<br/>Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine Umstellung"]
+A["Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine Umstellung"]
 ```
     
 **2.1 Seriennummer konnte nicht gelesen werden (sn is None)**
@@ -152,7 +179,7 @@ A["FAIL#2<br/>Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine 
 
 * Gerät wird **nicht umgestellt.**
 
-* Gerät darf am Bus bleiben.
+* Gerät muss zur Sicherheit vom Bus genommen werden.
 
 * Es wird `release()` ausgeführt (weil das Gerät aktiv war).
 
@@ -168,7 +195,7 @@ A["FAIL#2<br/>Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine 
 
 * Gerät wird **nicht umgestellt** (Schutz vor “falsches Gerät unter falschem dev_no”).
 
-* Gerät darf am Bus bleiben.
+* Gerät muss zur Sicherheit vom Bus genommen werden.
 
 * `release()` wird ausgeführt (weil aktiv).
 
@@ -199,11 +226,31 @@ A["FAIL#3<br/>Warnung"]
 
 * Das betrifft nur die Verifikation/Diagnose, nicht zwingend das Umstellen selbst.
 
-**4. Umstellung/Verify (Step 4) schlägt fehl**
+
+
+**4. Check same ids ergibt: new ids stimmen mit current ids überein**
+
+Das ist genau genommen kein Fehler. Das Device wird lediglich übersprungen.
+
+**Aktion:**
+
+* Gerät wird **nicht umgestellt.**
+
+* Gerät muss zur Sicherheit vom Bus genommen werden.
+
+* `release()` wird ausgeführt (weil aktiv).
+
+**YAML-Update:**
+
+* SUCCESS: in `current.ids` werden neue ids geschrieben (state=new). 
+
+
+
+**5. Umstellung/Verify (Step 5) schlägt fehl**
 
 ```mermaid
 flowchart TD
-A["FAIL#4<br/>State-Probe<br/>old / new / unknown"]
+A["State-Probe<br/>old / new / unknown"]
 ```
 
 **Aktion:**
@@ -218,7 +265,7 @@ A["FAIL#4<br/>State-Probe<br/>old / new / unknown"]
 
     * **state = "unknown"** → weder old noch new konnte aktiviert werden
 
-* Gerät darf am Bus bleiben (Case 1 hat eindeutige IDs; unknown ist allerdings ein Warnzustand).
+* Gerät muss vom Bus genommenn werden. 
 
 **YAML-Update** (`config.updated.yaml`) **abhängig vom state**:
 
