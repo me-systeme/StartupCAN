@@ -94,7 +94,7 @@ def _connect_one(dev_no: int):
     print("\n" + "=" * 80)
     print(f"[WIZARD] DEV {dev_no}")
     print("⚠️  WICHTIG: Es darf GENAU EIN Gerät am CAN-Bus angeschlossen sein.")
-    print("➡️  Bitte jetzt GENAU EIN Gerät anschließen.")
+    print(f"➡️  Bitte jetzt DEV {dev_no} anschließen.")
     print("=" * 80)
     _pause("Wenn angeschlossen:")
 
@@ -186,8 +186,10 @@ def _set_ids_reset_reactivate_verify_release(
     """
     try:
         # if dev_no == 1:
-        #     cmd_new_test = 258 # 0x102
-        #     ans_new_test = 259 # 0x103
+        #     cmd_new_test = 264    # 0x108
+        #     ans_new_test = 265    # 0x109
+        #     # cmd_new_test = 514 # 0x202
+        #     # ans_new_test = 515 # 0x203
         #     print(f"[{_fmt_dev(dev_no, serial)}] set NEW IDs: CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)}")
         #     gsv.set_can_settings(dev_no, CANSET_CAN_IN_CMD_ID, cmd_new_test)
         #     gsv.set_can_settings(dev_no, CANSET_CAN_OUT_ANS_ID, ans_new_test)
@@ -208,8 +210,10 @@ def _set_ids_reset_reactivate_verify_release(
         _safe_release(gsv, dev_no, where="after reset")
         time.sleep(0.2)
 
-        ok, sn2 = _try_activate(gsv, dev_no, cmd_new, ans_new, tries=8, delay=0.5, read_sn=True)
+        print(f"[{_fmt_dev(dev_no, serial)}] Re-activation after setting can ids: CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)}")
+        ok, sn2 = _try_activate(gsv, dev_no, cmd_new, ans_new, tries=8, delay=0.5, read_sn=True, verbose=False)
         if not ok:
+            print(f"[{_fmt_dev(dev_no, serial)}] Re-activation with CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)} failed.")
             return False, serial
 
         sn_out = sn2 if sn2 is not None else serial
@@ -417,17 +421,25 @@ def _probe_state_after_fail(
     # 1) old testen
     # cmd_old = 514
     # ans_old = 515
+    print(f"[DEV {dev_no}] Starting probe state=old: CMD={fmt_can_id(cmd_old)} ANS={fmt_can_id(ans_old)}")
     ok_old = _try_activate_n(gsv, dev_no, cmd_old, ans_old)
     if ok_old:
+        print(f"[DEV {dev_no}] Probe state=old was successfull. Die current IDs im YAML bleiben auf den alten IDs.")
         _safe_release(gsv, dev_no, where="probe:old-ok")
         return "old"
 
+    print(f"[DEV {dev_no}] Starting probe state=new: CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)}")
     # 2) new testen
+    # cmd_new_test = 264    # 0x108
+    # ans_new_test = 265    # 0x109
+    # ok_new = _try_activate_n(gsv, dev_no, cmd_new_test, ans_new_test)
     ok_new = _try_activate_n(gsv, dev_no, cmd_new, ans_new)
     if ok_new:
+        print(f"[DEV {dev_no}] Probe state=new was successfull. Die current IDs im YAML werden mit den neuen IDs überschrieben.")
         _safe_release(gsv, dev_no, where="probe:new-ok")
         return "new"
 
+    print(f"[DEV {dev_no}] Probes state=old and state=new failed. CAN IDs are unknown. Die current IDs im YAML bleiben auf den alten IDs und es wird unknown=true gesetzt.")
     return "unknown"
 
 def _write_updated_yaml(
@@ -752,7 +764,7 @@ def main() -> int:
                         if not skip_programming:
                             if int(expected_sn) != int(sn):
                                 print(
-                                    f"[{_fmt_dev(dev_no, sn)}] FEHLER: Seriennummer passt nicht zu YAML current.ids "
+                                    f"[{_fmt_dev(dev_no, sn)}] FEHLER: Die gelesene Seriennummer {sn} passt nicht zu YAML current.ids "
                                     f"(yaml SN={expected_sn}). => Device wird NICHT umgestellt."
                                 )
                                 results.append({
@@ -765,7 +777,7 @@ def main() -> int:
                                     "ans_new": ans_new,
                                 })
                                 skip_programming = True
-                                disconnect_reason ="Die gelesene Seriennummer stimmt nicht mit der konfigurierten Seriennummer aus dem YAML überein."
+                                disconnect_reason ="Die gelesene Seriennummer stimmt nicht mit der konfigurierten Seriennummer aus dem YAML überein. Die Seriennummer aus dem YAML wird im neuen YAML mit der gelesenen Seriennummer überschrieben."
                                 print("-" * 80)
                                 
                     if not skip_programming:
@@ -928,7 +940,7 @@ def main() -> int:
                         if not skip_programming:
                             if int(expected_sn) != int(sn):
                                 print(
-                                    f"[{_fmt_dev(dev_no, sn)}] FEHLER: Seriennummer passt nicht zu YAML current.ids "
+                                    f"[{_fmt_dev(dev_no, sn)}] FEHLER: Die gelesene Seriennummer {sn} passt nicht zu YAML current.ids"
                                     f"(yaml SN={expected_sn}). => Device wird NICHT umgestellt."
                                 )
                                 results.append({
@@ -941,7 +953,7 @@ def main() -> int:
                                     "ans_new": ans_new,
                                 })
                                 skip_programming = True
-                                disconnect_reason = "Die gelesene Seriennummer stimmt nicht mit der konfigurierten Seriennummer aus dem YAML überein."
+                                disconnect_reason = "Die gelesene Seriennummer stimmt nicht mit der konfigurierten Seriennummer aus dem YAML überein. Die Seriennummer aus dem YAML wird im neuen YAML mit der gelesenen Seriennummer überschrieben."
                                 print("-" * 80)
                                 
                     if not skip_programming:

@@ -185,7 +185,7 @@ A["Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine Umstellung"
 
 **YAML-Update:**
 
-* `current.ids` bleibt auf den alten IDs; `serial` wird für dieses Gerät **nicht** übernommen (weil unbekannt).
+* `current.ids` bleibt auf den alten IDs; der `serial` Eintrag wird nicht verändert (die Seriennummer könnte korrekt sein).
 
 * `new.ids` bleibt bestehen (bei erneutem Run kann es wieder versucht werden).
 
