@@ -419,8 +419,8 @@ def _probe_state_after_fail(
     time.sleep(0.3)  
 
     # 1) old testen
-    # cmd_old = 514
-    # ans_old = 515
+    # cmd_old = 258   # 0x102
+    # ans_old = 259   # 0x103
     print(f"[DEV {dev_no}] Starting probe state=old: CMD={fmt_can_id(cmd_old)} ANS={fmt_can_id(ans_old)}")
     ok_old = _try_activate_n(gsv, dev_no, cmd_old, ans_old)
     if ok_old:
@@ -430,9 +430,8 @@ def _probe_state_after_fail(
 
     print(f"[DEV {dev_no}] Starting probe state=new: CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)}")
     # 2) new testen
-    # cmd_new_test = 264    # 0x108
-    # ans_new_test = 265    # 0x109
-    # ok_new = _try_activate_n(gsv, dev_no, cmd_new_test, ans_new_test)
+    # cmd_new = 258    # 0x102
+    # ans_new = 259    # 0x103
     ok_new = _try_activate_n(gsv, dev_no, cmd_new, ans_new)
     if ok_new:
         print(f"[DEV {dev_no}] Probe state=new was successfull. Die current IDs im YAML werden mit den neuen IDs überschrieben.")

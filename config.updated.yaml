@@ -30,5 +30,5 @@ devices:
           cmd_id: '0x206'
           answer_id: '0x207'
     new:
-      default: false
+      default: true
       ids: []

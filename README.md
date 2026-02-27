@@ -211,7 +211,7 @@ A["Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine Umstellung"
 
 ```mermaid
 flowchart TD
-A["FAIL#3<br/>Warnung"]
+A["Warnung"]
 ```
 
 **Aktion:**
@@ -229,6 +229,11 @@ A["FAIL#3<br/>Warnung"]
 
 
 **4. Check same ids ergibt: new ids stimmen mit current ids überein**
+
+```mermaid
+flowchart TD
+E["Check = Same IDs"]
+```
 
 Das ist genau genommen kein Fehler. Das Device wird lediglich übersprungen.
 
@@ -298,21 +303,24 @@ Wenn **alle** Geräte erfolgreich umgestellt wurden:
 
 ## Case 3 - Forced Reset Wizard (`current.default = false`, `new.default = true`)
 
+
 ```mermaid
 flowchart TD
   A["Start: Device aus current.ids"] --> B["1. Activate mit current IDs"]
 
-  B -->|FAIL| F1["FAIL#1<br/>Activate fehlgeschlagen<br/>→ keine Umstellung<br/>→ current bleibt alt<br/>→ Device darf am Bus bleiben"]
+  B -->|FAIL| P
   B -->|OK| C["2. Serial-Check<br/>nur wenn serial in current.ids"]
 
-  C -->|FAIL| F2["FAIL#2<br/>Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine Umstellung<br/>→ Device darf am Bus bleiben"]
+  C -->|FAIL| F2["Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine Umstellung"]
   C -->|OK| D["3. Read CAN Settings<br/>(best-effort)"]
 
-  D -->|Warnung| E
-  D -->|OK| E["4. Set DEFAULT IDs<br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
+  D -->|OK/ not OK| E["4. Check <br/>Same IDs?"]
 
-  E -->|OK| S["SUCCESS<br/>current.ids = DEFAULT IDs<br/>→ Device MUSS vom Bus"]
-  E -->|FAIL| P["FAIL#4<br/>State-Probe<br/>old / new(default) / unknown<br/>→ Device MUSS vom Bus (Sicherheitsregel)"]
+  E -->|No| F["5. Set new IDs<br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
+  E -->|Yes| F3["SUCCESS<br/>current.ids = DEFAULT IDs"]
+  
+  F -->|FAIL| P["State-Probe<br/>old / new / unknown"]
+  F -->|OK| S["SUCCESS<br/>current.ids = DEFAULT IDs"]
 
   P -->|old| O["current.ids bleibt alt"]
   P -->|new| N["current.ids = DEFAULT IDs"]
@@ -421,20 +429,34 @@ Wenn Schritt 4 fehlschlägt → Fehlerfall **4** (State-Probe).
 
 ```mermaid
 flowchart TD
-A["FAIL#1<br/>Activate fehlgeschlagen<br/>→ keine Umstellung<br/>→ current bleibt alt"]
+A["State-Probe<br/>old / new / unknown"]
 ```
 
 **Aktion:**
 
 * Gerät wird **nicht umgestellt**
 
-* Gerät darf am Bus bleiben (es ist ja weiterhin “current”, also eindeutig)
-
 * `release()` nicht notwendig (keine Session aufgebaut), optional best-effort ok
 
-**YAML-Update:**
+* Es wird “Best-Effort” geprüft, welche IDs tatsächlich aktiv sind:
 
-* `current.ids` bleibt auf **alten** IDs
+    * **state = "old"** → Gerät besitzt sehr wahrscheinlich die konfigurierten IDs in `current.ids`. Das erste activate hat nicht geklappt. Jetzt klappt es aber. 
+
+    * **state = "new"** → Gerät ist sehr wahrscheinlich bereits auf neuen IDs
+
+    * **state = "unknown"** → weder old noch new konnte aktiviert werden
+
+* Gerät muss zur Sicherheit vom Bus genommen werden.
+
+**YAML-Update** (`config.updated.yaml`) **abhängig vom state**:
+
+* **state="old"** → `current.ids` bleibt auf alten IDs
+
+* **state="new"** → `current.ids` wird auf neue IDs gesetzt
+
+* **state="unknown"** → `current.ids` bleibt auf alten IDs **und** `unknown: true` wird gesetzt (als Warnflag)
+
+* `new.ids` bleibt unverändert (Ziel bleibt bestehen)
 
 * Ziel bleibt bestehen (`new.default=true`), weil Reset-Wizard noch nicht komplett erfolgreich war
 
@@ -443,7 +465,7 @@ A["FAIL#1<br/>Activate fehlgeschlagen<br/>→ keine Umstellung<br/>→ current b
 
 ```mermaid
 flowchart TD
-A["FAIL#2<br/>Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine Umstellung"]
+A["Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine Umstellung"]
 ```
 
 **2.1 Seriennummer konnte nicht gelesen werden (sn is None)**
@@ -452,7 +474,7 @@ A["FAIL#2<br/>Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine 
 
 * Gerät wird **nicht umgestellt**
 
-* Gerät darf am Bus bleiben
+* Gerät muss vom Bus genommen werden
 
 * `release()` wird gemacht (weil aktiv)
 
@@ -460,7 +482,7 @@ A["FAIL#2<br/>Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine 
 
 * `current.ids` bleibt alt
 
-* `serial` nicht übernehmen (unbekannt)
+* `serial` bleibt im YAML (könnte korrekt sein)
 
 * Ziel bleibt bestehen (`new.default=true`), weil Reset-Wizard noch nicht komplett erfolgreich war
 
@@ -470,7 +492,7 @@ A["FAIL#2<br/>Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine 
 
 * Schutz: Gerät wird **nicht** umgestellt (falsches Gerät unter falschem dev_no)
 
-* Gerät darf am Bus bleiben
+* Gerät muss vom Bus genommen werden
 
 * `release()` (weil aktiv)
 
@@ -487,7 +509,7 @@ A["FAIL#2<br/>Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine 
 
 ```mermaid
 flowchart TD
-A["FAIL#3<br/>Warnung"]
+A["Warnung"]
 ```
 
 **Aktion:**
@@ -497,11 +519,34 @@ A["FAIL#3<br/>Warnung"]
 * Schritt 4 läuft trotzdem
 
 
-**4. Umstellung/Verify (Step 4) schlägt fehl → State-Probe + Bus-Sicherheitsregel**
+**4. Check same ids ergibt: new ids stimmen mit current ids überein**
 
 ```mermaid
 flowchart TD
-A["FAIL#4<br/>State-Probe<br/>old / new(default) / unknown"]
+E["Check = Same IDs"]
+```
+
+Das ist genau genommen kein Fehler. Das Device wird lediglich übersprungen.
+
+**Aktion:**
+
+* Gerät wird **nicht umgestellt.**
+
+* Gerät muss zur Sicherheit vom Bus genommen werden.
+
+* `release()` wird ausgeführt (weil aktiv).
+
+**YAML-Update:**
+
+* SUCCESS: in `current.ids` werden neue ids geschrieben (state=new). 
+
+
+
+**5. Umstellung/Verify (Step 4) schlägt fehl → State-Probe + Bus-Sicherheitsregel**
+
+```mermaid
+flowchart TD
+A["State-Probe<br/>old / new(default) / unknown"]
 ```
 
 **Aktion:**
@@ -516,13 +561,7 @@ A["FAIL#4<br/>State-Probe<br/>old / new(default) / unknown"]
 
     * **state="unknown"** → weder old noch default konnte aktiviert werden
 
-**Wichtig (Case-3-Regel):**
-
-* Nach diesem Fehler wird das Gerät **immer vom Bus genommen**, weil:
-
-    * falls es bereits DEFAULT ist → Kollision mit späteren DEFAULT-Devices
-
-    * falls unknown → Risiko, dass es DEFAULT oder “halb umgestellt” ist
+* Das Gerät muss vom Bus genommen werden
 
 **YAML-Update** (`config.updated.yaml`) abhängig vom state:
 
@@ -532,12 +571,16 @@ A["FAIL#4<br/>State-Probe<br/>old / new(default) / unknown"]
 
 * **state="unknown"** → `current.ids` bleibt alt + `unknown: true`
 
+* `current.default` bleibt auf false
+
+* Ziel bleibt bestehen (`new.default=true`), weil Reset-Wizard noch nicht komplett erfolgreich war
+
 
 ### **Erfolgsfall**
 
 ```mermaid
 flowchart TD
-A["SUCCESS<br/>current.ids = DEFAULT IDs<br/>→ Device MUSS vom Bus"]
+A["SUCCESS<br/>current.ids = DEFAULT IDs"]
 ```
 
 Wenn `ok=True`:
@@ -553,7 +596,7 @@ Nach dem Wizard werden die `results` in `config.updated.yaml` übertragen:
 
 * Für jedes Device:
 
-    * `ok=True` → `current.ids = DEFAULT IDs`
+    * `ok=True` → `current.ids = DEFAULT IDs` mit gelesenen Seriennummern
 
     * `ok=False` → je nach `state` (old/new/unknown) wie oben beschrieben
 
