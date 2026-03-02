@@ -7,9 +7,9 @@ flowchart TD
   A["Start: Device aus current.ids"] --> B["1. Activate mit current IDs"]
 
   B -->|FAIL| P
-  B -->|OK| C["2. Serial-Check<br/>nur wenn serial in current.ids"]
+  B -->|OK| C["2. Serial-Check<br/>wenn serial in current.ids und/oder serial in new.ids"]
 
-  C -->|FAIL| F2["Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine Umstellung"]
+  C -->|FAIL| F2["Serial passt nicht / nicht lesbar / SN_MODE: Ziel ID konnte nicht bestimmt werden"]
   C -->|OK| D["3. Read CAN Settings<br/>(best-effort)"]
 
   D -->|OK/ not OK| E["4. Check <br/>Same IDs?"]
@@ -26,7 +26,7 @@ flowchart TD
 
 ``` 
 
-In diesem Modus werden (eindeutige) CAN IDs auf neue eindeutige CAN IDs umgestellt. Zur Sicherheit darf immer nur ein Gerät gleichzeitig am Bus sein. Es wird per `dev_no` gemappt. Jedes Gerät wird nacheinander:
+In diesem Modus werden (eindeutige) CAN IDs auf neue eindeutige CAN IDs umgestellt. Zur Sicherheit darf immer nur ein Gerät gleichzeitig am Bus sein. Es wird per `dev_no` oder per `serial` gemappt. Jedes Gerät wird nacheinander:
 
 * mit den **current IDs** aktiviert,
 
@@ -57,11 +57,11 @@ Wenn Schritt 1 fehlschlägt: → siehe Fehlerfall **1**.
 Wenn Schritt 1 erfolgreich: → weiter mit Schritt **2**. 
 
 
-**Schritt 2 – Seriennummer-Check (optional, wenn serial in current.ids gesetzt)**
+**Schritt 2 – Seriennummer-Check (optional, wenn serial in current.ids oder serial in new.ids gesetzt)**
 
 ```mermaid
 flowchart TD
-A["2. Serial-Check<br/>nur wenn serial in current.ids"]
+A["2. Serial-Check<br/>wenn serial in current.ids und/oder serial in new.ids"]
 ```
 
 Wenn `devices.config.current.ids` für dieses `dev_no` eine `serial` enthält, muss die gelesene Seriennummer passen:
@@ -70,9 +70,14 @@ Wenn `devices.config.current.ids` für dieses `dev_no` eine `serial` enthält, m
 
 * 2.2 `sn != expected_sn` → Fehlerfall **2.2**
 
-* Wenn SN ok oder keine SN in YAML gefordert ist → weiter mit Schritt **3**.
+Wenn `devices.config.new.ids` für alle Geräte `serial` enthält, wird über die Seriennummer gemappt.
 
-Hinweis: In beiden Fehlerfällen ist das Gerät **aktiv gewesen**, deshalb wird **released**.
+* 2.3 `_target_ids(dev_no, sn)` failed → Fehlerfall **2.3**
+
+
+Wenn SN ok oder keine SN in YAML gefordert ist → weiter mit Schritt **3**.
+
+Hinweis: In allen Fehlerfällen ist das Gerät **aktiv gewesen**, deshalb wird **released**.
 
 
 **Schritt 3 – Read CAN Settings (optional / Best-Effort)**
@@ -166,11 +171,11 @@ A["State-Probe<br/>old / new / unknown"]
 
 
 
-**2. Serial-Check (Step 2) schlägt fehl (nur wenn serial: in current.ids gesetzt ist)**
+**2. Serial-Check (Step 2) schlägt fehl (wenn serial in current.ids oder in new.ids gesetzt ist)**
 
 ```mermaid
 flowchart TD
-A["Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine Umstellung"]
+A["Serial passt nicht / nicht lesbar / SN_MODE: Ziel ID konnte nicht bestimmt werden"]
 ```
     
 **2.1 Seriennummer konnte nicht gelesen werden (sn is None)**
@@ -206,6 +211,22 @@ A["Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine Umstellung"
 * Die gelesene Seriennummer wird in `config.updated.yaml` **mitgeschrieben**, damit man beim nächsten Run die Zuordnung korrigieren kann.
 
 * `new.ids` bleibt bestehen.
+
+
+**2.3 SN_MODE: Ziel IDs konnten nicht bestimmt werden**
+
+**Aktion:**
+
+* Gerät wird **nicht umgestellt**
+
+* Gerät muss zur Sicherheit vom Bus genommen werden.
+
+* `release()` wird ausgeführt (weil aktiv).
+
+* Die gelesene Seriennummer wird in `config.updated.yaml` **mitgeschrieben**
+
+* `new.ids` bleibt bestehen.
+
 
 **3. Read CAN Settings (Step 3) schlägt fehl**
 
@@ -299,6 +320,285 @@ Wenn **alle** Geräte erfolgreich umgestellt wurden:
 
 * Dadurch ist ein erneuter Run “safe” und versucht nicht erneut umzustellen.
 
+
+## Case 2 – Default mode (`current.default=true`, `new.default=false`)
+
+```mermaid
+flowchart TD
+  B["1. Activate mit Default IDs"]
+
+  B -->|FAIL| P
+  B -->|OK| D["2. Get Target IDs"]
+  
+  D -->|FAIL| F2["Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine Umstellung"]
+  D -->|OK| E["3. Read CAN Settings<br/>(best-effort)"]
+
+  E -->|OK/ not OK| F["4. Check <br/>Same IDs?"]
+  
+  F -->|No| G["5. Set new IDs<br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
+  F -->|Yes| F3["SUCCESS<br/>current.ids = new.ids"]
+  
+  G -->|FAIL| P["State-Probe<br/>old / new / unknown"]
+  G -->|OK| S["SUCCESS<br/>current.ids = new.ids"]
+
+  P -->|old| O["current.ids bleibt alt"]
+  P -->|new| N["current.ids = new IDs"]
+  P -->|unknown| U["current.ids alt + unknown=true"]
+
+``` 
+
+In diesem Modus werden die Default CAN IDs auf neue eindeutige CAN IDs umgestellt. Zur Sicherheit darf immer nur ein Gerät gleichzeitig am Bus sein. Es wird entweder per `serial` aus `new.ids` oder per `dev_no` gemappt. Die `current.ids` Liste wird ignoriert. Jedes Gerät wird nacheinander:
+
+* mit den **default IDs** aktiviert,
+
+* auf die **new IDs** umgestellt,
+
+* per Reset/Release/Re-Activate verifiziert,
+
+* danach wieder released,
+
+* und am Ende wird eine **config.updated.yaml** geschrieben, die den Ist-Zustand abbildet.
+
+### **Ablauf / Reihenfolge (pro Device)**
+
+**Schritt 1 - Activate (default IDs)**
+
+```mermaid
+flowchart TD
+    A["1. Activate mit default IDs"]
+```
+
+* `activate(dev_no, DEFAULT_CMD_ID, DEFAULT_ANS_ID)`
+* Seriennummer wird gelesen (`get_serial_no`) und geloggt.
+
+Wenn Schritt 1 fehlschlägt: → siehe Fehlerfall **1**.
+
+Wenn Schritt 1 erfolgreich: → weiter mit Schritt **2**. 
+
+
+**Schritt 2 – Bestimmung der Ziel-IDs**
+
+```mermaid
+flowchart TD
+A["2. Get Target IDs"]
+```
+
+Wenn keine `serial` in `new.ids` konfiguriert sind, wird wie in Case 1 per `dev_no` gemappt (einfacher Fall).
+Es gibt in Case 2 aber auch die Option des Mappings per Seriennummer. Dafür muss jeder Eintrag in `serial` für jedes Gerät existieren. In diesem Modus muss man beim Anschließen der Geräte nicht auf die Reihenfolge (`dev_no`) achten, sondern das Gerät mit der Seriennummer `serial` erhält die entsprechenden neuen IDs aus `new.ids`. 
+
+Wenn Schritt 2 fehlschlägt: → siehe Fehlerfall **2**.
+
+Wenn Schritt 2 erfolgreich: → weiter mit Schritt **3**.
+
+
+**Schritt 3 – Read CAN Settings (optional / Best-Effort)**
+
+```mermaid
+flowchart TD
+A["3. Read CAN Settings<br/>(best-effort)"]
+``` 
+
+* `get_can_settings` liest CMD/ANS aus dem Gerät (Index-Konstanten müssen korrekt sein).
+
+* Fehler hier ist **nur eine Warnung** und stoppt den Ablauf nicht.
+
+**Wichtig:** Auch wenn Schritt 3 fehlschlägt, geht es **trotzdem weiter** zu Schritt **4**.
+
+
+***Schritt 4 - Check same IDs**
+
+```mermaid
+flowchart TD
+A["4. Check <br/>Same IDs?"]
+```
+
+Falls das Gerät bereits die neuen IDs besitzt, wird das Gerät übersprungen. 
+
+Wenn nicht, geht es weiter mit Schritt **5**.
+
+
+**Schritt 5 – Set IDs → Reset → Release → Re-Activate → Verify → Release**
+
+```mermaid
+flowchart TD
+A["5. Set new IDs<br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
+``` 
+
+* `set_can_settings(CANSET_CAN_IN_CMD_ID, cmd_new)`
+
+* `set_can_settings(CANSET_CAN_OUT_ANS_ID, ans_new)`
+
+* `reset_device()`
+
+* `release()`
+
+* Re-Activate mit `cmd_new/ans_new` (mit Retry-Logik `_try_activate_n`)
+
+* Verify über `get_can_settings` (Best-Effort)
+
+* abschließendes `release()`
+
+Wenn Schritt 5 erfolgreich ist → Device gilt als **OK / umgestellt**.
+
+Wenn Schritt 5 fehlschlägt → es wird eine **Zustandsprobe** durchgeführt (old/new/unknown) und entsprechend in `config.updated.yaml` eingetragen (siehe Fehlerfall **4**).
+
+
+
+### **Fehlerfälle und Verhalten**
+
+**1. Activate (Step 1) schlägt fehl**
+
+```mermaid
+flowchart TD
+A["State-Probe<br/>old / new / unknown"]
+```
+
+**Symptom:** activate funktioniert nicht (Timeout/249/…); keine aktive Session.
+
+**Aktion:**
+
+* Gerät wird **nicht umgestellt**.
+
+* Danach wird “Best-Effort” geprüft, welche IDs tatsächlich aktiv sind:
+
+    * **state = "old"** → Gerät besitzt sehr wahrscheinlich die konfigurierten IDs in `current.ids`. Das erste activate hat nicht geklappt. Jetzt klappt es aber. 
+
+    * **state = "new"** → Gerät ist sehr wahrscheinlich bereits auf neuen IDs
+
+    * **state = "unknown"** → weder old noch new konnte aktiviert werden
+
+* Gerät muss zur Sicherheit vom Bus genommen werden.
+
+**YAML-Update** (`config.updated.yaml`) **abhängig vom state**:
+
+* **state="old"** → `current.ids` bleibt auf alten IDs
+
+* **state="new"** → `current.ids` wird auf neue IDs gesetzt
+
+* **state="unknown"** → `current.ids` bleibt auf alten IDs **und** `unknown: true` wird gesetzt (als Warnflag)
+
+* `new.ids` bleibt unverändert (Ziel bleibt bestehen)
+
+* Aber: Es wird `current.default=false` gesetzt 
+
+**Hinweis:** Im SN_MODE ist immer **state = unknown**, da wir dem Gerät keine neuen IDs zuordnen konnten. 
+
+
+
+
+**2. Target-Bestimmung (Step 2) schlägt fehl (nur wenn serial: in new.ids gesetzt ist)**
+
+```mermaid
+flowchart TD
+A["Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine Umstellung"]
+```
+
+**Aktion:**
+
+* Gerät wird **nicht umgestellt.**
+
+* Gerät muss zur Sicherheit vom Bus genommen werden.
+
+* Es wird `release()` ausgeführt (weil das Gerät aktiv war).
+
+**YAML-Update:**
+
+* `current.ids` bleibt auf den alten IDs
+
+
+**3. Read CAN Settings (Step 3) schlägt fehl**
+
+```mermaid
+flowchart TD
+A["Warnung"]
+```
+
+**Aktion:**
+
+* Nur Warnung, **kein Abbruch**.
+
+* Es wird trotzdem **Schritt 4** ausgeführt.
+
+**Interpretation:**
+
+* Index-Konstanten könnten falsch sein, oder Device liefert in diesem Zustand keine Settings.
+
+* Das betrifft nur die Verifikation/Diagnose, nicht zwingend das Umstellen selbst.
+
+
+
+**4. Check same ids ergibt: new ids stimmen mit current ids überein**
+
+```mermaid
+flowchart TD
+E["Check = Same IDs"]
+```
+
+Das ist genau genommen kein Fehler. Das Device wird lediglich übersprungen.
+
+**Aktion:**
+
+* Gerät wird **nicht umgestellt.**
+
+* Gerät muss zur Sicherheit vom Bus genommen werden.
+
+* `release()` wird ausgeführt (weil aktiv).
+
+**YAML-Update:**
+
+* SUCCESS: in `current.ids` werden neue ids geschrieben (state=new). 
+
+
+
+**5. Umstellung/Verify (Step 5) schlägt fehl**
+
+```mermaid
+flowchart TD
+A["State-Probe<br/>old / new / unknown"]
+```
+
+**Aktion:**
+
+* Gerät wird **nicht sicher als umgestellt** markiert.
+
+* Danach wird “Best-Effort” geprüft, welche IDs tatsächlich aktiv sind:
+
+    * **state = "old"** → Gerät ist sehr wahrscheinlich auf den alten IDs geblieben
+
+    * **state = "new"** → Gerät ist sehr wahrscheinlich bereits auf neuen IDs
+
+    * **state = "unknown"** → weder old noch new konnte aktiviert werden
+
+* Gerät muss vom Bus genommenn werden. 
+
+**YAML-Update** (`config.updated.yaml`) **abhängig vom state**:
+
+* **state="old"** → `current.ids` bleibt auf alten IDs
+
+* **state="new"** → `current.ids` wird auf neue IDs gesetzt
+
+* **state="unknown"** → `current.ids` bleibt auf alten IDs **und** `unknown: true` wird gesetzt (als Warnflag)
+
+* `new.ids` bleibt unverändert (Ziel bleibt bestehen)
+
+* Aber: Es wird `current.default=false` gesetzt 
+
+### **Erfolgsfall**
+
+```mermaid
+flowchart TD
+A["SUCCESS<br/>current.ids = new IDs"]
+```
+
+Wenn ein Gerät erfolgreich umgestellt wurde (`ok=True`):
+
+* `config.updated.yaml` schreibt für dieses Gerät in `current.ids` die **neuen IDs** (und ggf. die Seriennummer).
+
+Wenn **alle** Geräte erfolgreich umgestellt wurden:
+
+* `new.ids` wird in `config.updated.yaml` geleert (und `new.default=false` bleibt).
+
+* Dadurch ist ein erneuter Run “safe” und versucht nicht erneut umzustellen.
 
 
 ## Case 3 - Forced Reset Wizard (`current.default = false`, `new.default = true`)
@@ -691,7 +991,7 @@ Diese Validierungen werden unabhängig vom Case geprüft:
 
 ### Case 1: `current.default=false` & `new.default=false`
 
-**“Normalbetrieb”** – Umstellung mit Mapping **per dev_no**.
+**“Normalbetrieb”** – Umstellung mit Mapping **per dev_no** oder **per serial**.
 
 #### Zweck
 
@@ -706,9 +1006,17 @@ Diese Validierungen werden unabhängig vom Case geprüft:
 #### Zusätzliche Konfigurationsfehler (Case 1) (Ergänzung zu "Allgemeine Regeln" oben)
 
 
-1. `current.ids`und `new.ids` **enthalten nicht die gleichen dev_no**
+1. Mapping über `dev_no`: `current.ids`und `new.ids` **enthalten nicht die gleichen dev_no**
 
     Beispiel: `current` hat 1,2,3 aber `new` hat 1,2,4.
+
+2. **SN-Mode: Mischbetrieb ist verboten**
+
+    Wenn irgendein Eintrag in `new.ids` `serial` hat, dann müssen **alle** Einträge `serial` haben.
+
+3. **SN-Mode: Seriennummern kommen mehrfach vor** (müssen eindeutig sein)
+
+4. **SN-Mode: ungültige Serial (<0)**
 
 #### Erlaubt in Case 1
 
@@ -718,10 +1026,7 @@ Diese Validierungen werden unabhängig vom Case geprüft:
 
 * ✅ `current.ids` darf `serial` enthalten (wird für Checks / Logging genutzt).
 
-* ✅ `new.ids` darf `serial` enthalten, wird aber **ignoriert**.
-**Mapping passiert immer über** `dev_no`, nicht über `serial`.
-
-    (Im Tool wird dazu ein Hinweis ausgegeben: “serial in new.ids wird ignoriert”.)
+* ✅ `new.ids` darf `serial` enthalten. **Mapping passiert über** `dev_no` oder `serial`.
 
 * ✅ Eine CAN ID, die in der Liste `current.ids` bereits existiert, darf Ziel ID eines anderen Gerätes sein, solange die Eindeutigkeit in der Liste `new.ids` erfüllt bleibt. 
 

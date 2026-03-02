@@ -239,6 +239,17 @@ def load_config(path: Path) -> dict:
 
         return True
 
+    def _assert_same_serials(name_a: str, a: list[dict], name_b: str, b: list[dict]):
+        sa = {int(d["serial"]) for d in (a or []) if ("serial" in d and d["serial"] is not None)}
+        sb = {int(d["serial"]) for d in (b or []) if ("serial" in d and d["serial"] is not None)}
+        if sa != sb:
+            only_a = sorted(sa - sb)
+            only_b = sorted(sb - sa)
+            raise ValueError(
+                f"{name_a} und {name_b} müssen die gleichen serials enthalten. "
+                f"Nur in {name_a}: {only_a} | Nur in {name_b}: {only_b}"
+            )
+
 
     # current.ids: DOPPELTE IDs sind erlaubt (one-device-regel)
     # aber cmd_id != answer_id pro Gerät bleibt Pflicht.
@@ -310,14 +321,19 @@ def load_config(path: Path) -> dict:
                 "current.default=false & new.default=false: current.ids und new.ids müssen gleich lang sein."
             )
         
-        _assert_same_dev_nos(
+        
+        IGNORE_NEW_SERIALS = False
+
+        SN_MODE = _detect_and_validate_sn_mode(device_new_raw)
+        # if SN_MODE:
+        #     _assert_same_serials("devices.config.current.ids", device_current,
+        #                  "devices.config.new.ids", device_new_raw)
+
+        if not SN_MODE:
+            _assert_same_dev_nos(
             "devices.config.current.ids", device_current,
             "devices.config.new.ids", device_new_raw
-        )
-        
-        IGNORE_NEW_SERIALS = _has_serials(device_new_raw)
-
-        SN_MODE = False
+            )
 
         dev_nos_for_run = [d["dev_no"] for d in device_current]  # Quelle: current
         # Ziel ist new.ids wie angegeben

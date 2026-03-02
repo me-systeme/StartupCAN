@@ -186,10 +186,10 @@ def _set_ids_reset_reactivate_verify_release(
     """
     try:
         # if dev_no == 1:
-        #     cmd_new_test = 264    # 0x108
-        #     ans_new_test = 265    # 0x109
-        #     # cmd_new_test = 514 # 0x202
-        #     # ans_new_test = 515 # 0x203
+        #     # cmd_new_test = 264    # 0x108
+        #     # ans_new_test = 265    # 0x109
+        #     cmd_new_test = 514 # 0x202
+        #     ans_new_test = 515 # 0x203
         #     print(f"[{_fmt_dev(dev_no, serial)}] set NEW IDs: CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)}")
         #     gsv.set_can_settings(dev_no, CANSET_CAN_IN_CMD_ID, cmd_new_test)
         #     gsv.set_can_settings(dev_no, CANSET_CAN_OUT_ANS_ID, ans_new_test)
@@ -430,8 +430,8 @@ def _probe_state_after_fail(
 
     print(f"[DEV {dev_no}] Starting probe state=new: CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)}")
     # 2) new testen
-    # cmd_new = 258    # 0x102
-    # ans_new = 259    # 0x103
+    # cmd_new = 256    # 0x100
+    # ans_new = 257    # 0x101
     ok_new = _try_activate_n(gsv, dev_no, cmd_new, ans_new)
     if ok_new:
         print(f"[DEV {dev_no}] Probe state=new was successfull. Die current IDs im YAML werden mit den neuen IDs überschrieben.")
@@ -549,6 +549,12 @@ def main() -> int:
                 disconnect_reason = "Weiter mit nächstem Gerät."
 
                 try: 
+                    # if dev_no == 1:
+                    #     DEFAULT_CMD_ID_TEST = 258    # 0x102
+                    #     DEFAULT_ANS_ID_TEST = 259    # 0x103
+                    #     ok, sn = _try_activate(gsv, dev_no, DEFAULT_CMD_ID_TEST, DEFAULT_ANS_ID_TEST, tries=5, delay=0.3, read_sn=True)
+                    # else: 
+                    #     ok, sn = _try_activate(gsv, dev_no, DEFAULT_CMD_ID, DEFAULT_ANS_ID, tries=5, delay=0.3, read_sn=True)
                     # Aktivieren immer mit Default IDs
                     ok, sn = _try_activate(gsv, dev_no, DEFAULT_CMD_ID, DEFAULT_ANS_ID, tries=5, delay=0.3, read_sn=True)
 
@@ -576,26 +582,28 @@ def main() -> int:
                         disconnect_reason = f"Aktivierung (DEFAULT) fehlgeschlagen. State probe={state}. Gerät abnehmen."
                         
                     if not skip_programming:
-                        try:
-                            cmd_new, ans_new = _target_ids(dev_no, sn)
-                            if SN_MODE:
+                        if SN_MODE:
+                            try:
+                                cmd_new, ans_new = _target_ids(dev_no, sn)
                                 print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs per SN-Mapping.")
-                            else:
-                                print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs per dev_no-Mapping.")
-                        except KeyError as e:
-                            print(f"[{_fmt_dev(dev_no, sn)}] FEHLER: {e}")
+                            except KeyError as e:
+                                print(f"[{_fmt_dev(dev_no, sn)}] FEHLER: {e}")
 
-                            results.append({
-                                "dev_no": dev_no,
-                                "serial": sn,
-                                "ok": False,
-                                "cmd_old": DEFAULT_CMD_ID,
-                                "ans_old": DEFAULT_ANS_ID,
-                                "cmd_new": DEFAULT_CMD_ID,
-                                "ans_new": DEFAULT_ANS_ID,
-                            })
-                            skip_programming = True
-                            disconnect_reason = "FEHLER: Ziel-IDs konnten nicht bestimmt werden. Dieses Gerät wird übersprungen."
+                                results.append({
+                                    "dev_no": dev_no,
+                                    "serial": sn,
+                                    "ok": False,
+                                    "cmd_old": DEFAULT_CMD_ID,
+                                    "ans_old": DEFAULT_ANS_ID,
+                                    "cmd_new": DEFAULT_CMD_ID,
+                                    "ans_new": DEFAULT_ANS_ID,
+                                })
+                                skip_programming = True
+                                disconnect_reason = "FEHLER: Ziel-IDs konnten nicht bestimmt werden. Dieses Gerät wird übersprungen."
+                        else: 
+                            # dev_no mapping: sollte durch config garantiert sein → kein try/except nötig
+                            cmd_new, ans_new = _new_ids_for(dev_no)
+                            print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs per dev_no-Mapping.")
                 
         
                             
@@ -881,7 +889,6 @@ def main() -> int:
                 dev_no = int(d["dev_no"])
                 cmd_id = int(d["cmd_id"])
                 ans_id = int(d["answer_id"])
-                cmd_new, ans_new = _new_ids_for(dev_no)
                 
                 _connect_one(dev_no)
 
@@ -897,20 +904,24 @@ def main() -> int:
 
                     ok, sn = _try_activate(gsv, dev_no, cmd_id, ans_id, tries=5, delay=0.3, read_sn=True)
                     if not ok:
-                        # Best-effort: vielleicht ist das Gerät schon auf NEW IDs?
-                        state = _probe_state_after_fail(gsv, dev_no, cmd_id, ans_id, cmd_new, ans_new)
+                        if SN_MODE:
+                            # Target unbekannt ohne SN -> keine probe auf new
+                            state = "unknown"
+                            cmd_new, ans_new = cmd_id, ans_id  # oder 0/0
+                        else:
+                            cmd_new, ans_new = _new_ids_for(dev_no)
+                            state = _probe_state_after_fail(gsv, dev_no, cmd_id, ans_id, cmd_new, ans_new)
 
                         results.append({
                             "dev_no": dev_no,
                             "serial": sn,
                             "ok": False,
-                            "state": state,         
+                            "state": state,
                             "cmd_old": cmd_id,
                             "ans_old": ans_id,
                             "cmd_new": cmd_new,
                             "ans_new": ans_new,
                         })
-
                         skip_programming = True
                         disconnect_reason = f"Activation failed. State probe={state}. Gerät abnehmen."
                         
@@ -954,6 +965,30 @@ def main() -> int:
                                 skip_programming = True
                                 disconnect_reason = "Die gelesene Seriennummer stimmt nicht mit der konfigurierten Seriennummer aus dem YAML überein. Die Seriennummer aus dem YAML wird im neuen YAML mit der gelesenen Seriennummer überschrieben."
                                 print("-" * 80)
+
+                    if not skip_programming:
+                        if SN_MODE:
+                            try:
+                                cmd_new, ans_new = _target_ids(dev_no, sn)
+                                print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs per SN-Mapping.")
+                            except KeyError as e:
+                                print(f"[{_fmt_dev(dev_no, sn)}] FEHLER: {e}")
+
+                                results.append({
+                                    "dev_no": dev_no,
+                                    "serial": sn,
+                                    "ok": False,
+                                    "cmd_old": DEFAULT_CMD_ID,
+                                    "ans_old": DEFAULT_ANS_ID,
+                                    "cmd_new": DEFAULT_CMD_ID,
+                                    "ans_new": DEFAULT_ANS_ID,
+                                })
+                                skip_programming = True
+                                disconnect_reason = "FEHLER: Ziel-IDs konnten nicht bestimmt werden. Dieses Gerät wird übersprungen."
+                        else: 
+                            # dev_no mapping: sollte durch config garantiert sein → kein try/except nötig
+                            cmd_new, ans_new = _new_ids_for(dev_no)
+                            print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs per dev_no-Mapping.")
                                 
                     if not skip_programming:
                         # Optional: prüfen
