@@ -328,9 +328,9 @@ flowchart TD
   B["1. Activate mit Default IDs"]
 
   B -->|FAIL| P
-  B -->|OK| D["2. Get Target IDs"]
+  B -->|OK| D["2. SN_MODE: Get Target IDs"]
   
-  D -->|FAIL| F2["Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine Umstellung"]
+  D -->|FAIL| F2[" SN_MODE: Ziel ID konnte per serial nicht bestimmt werden"]
   D -->|OK| E["3. Read CAN Settings<br/>(best-effort)"]
 
   E -->|OK/ not OK| F["4. Check <br/>Same IDs?"]
@@ -380,7 +380,7 @@ Wenn Schritt 1 erfolgreich: → weiter mit Schritt **2**.
 
 ```mermaid
 flowchart TD
-A["2. Get Target IDs"]
+A["2. SN_MODE: Get Target IDs"]
 ```
 
 Wenn keine `serial` in `new.ids` konfiguriert sind, wird wie in Case 1 per `dev_no` gemappt (einfacher Fall).
@@ -479,8 +479,6 @@ A["State-Probe<br/>old / new / unknown"]
 
 * `new.ids` bleibt unverändert (Ziel bleibt bestehen)
 
-* Aber: Es wird `current.default=false` gesetzt 
-
 **Hinweis:** Im SN_MODE ist immer **state = unknown**, da wir dem Gerät keine neuen IDs zuordnen konnten. 
 
 
@@ -490,7 +488,7 @@ A["State-Probe<br/>old / new / unknown"]
 
 ```mermaid
 flowchart TD
-A["Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine Umstellung"]
+A["SN_MODE: Ziel ID konnte per serial nicht bestimmt werden"]
 ```
 
 **Aktion:**
@@ -503,7 +501,7 @@ A["Serial passt nicht / nicht lesbar<br/>→ release()<br/>→ keine Umstellung"
 
 **YAML-Update:**
 
-* `current.ids` bleibt auf den alten IDs
+* `new.ids` bleibt auf den alten IDs
 
 
 **3. Read CAN Settings (Step 3) schlägt fehl**
@@ -581,8 +579,6 @@ A["State-Probe<br/>old / new / unknown"]
 
 * `new.ids` bleibt unverändert (Ziel bleibt bestehen)
 
-* Aber: Es wird `current.default=false` gesetzt 
-
 ### **Erfolgsfall**
 
 ```mermaid
@@ -598,7 +594,11 @@ Wenn **alle** Geräte erfolgreich umgestellt wurden:
 
 * `new.ids` wird in `config.updated.yaml` geleert (und `new.default=false` bleibt).
 
-* Dadurch ist ein erneuter Run “safe” und versucht nicht erneut umzustellen.
+* Es wird `current.default=false` gesetzt. 
+
+Dadurch ist ein erneuter Run “safe” und versucht nicht erneut umzustellen.
+
+* Nur wenn alle Geräte failen, bleibt `current.default=true`.
 
 
 ## Case 3 - Forced Reset Wizard (`current.default = false`, `new.default = true`)

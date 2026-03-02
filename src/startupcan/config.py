@@ -329,11 +329,10 @@ def load_config(path: Path) -> dict:
         #     _assert_same_serials("devices.config.current.ids", device_current,
         #                  "devices.config.new.ids", device_new_raw)
 
-        if not SN_MODE:
-            _assert_same_dev_nos(
-            "devices.config.current.ids", device_current,
-            "devices.config.new.ids", device_new_raw
-            )
+        _assert_same_dev_nos(
+        "devices.config.current.ids", device_current,
+        "devices.config.new.ids", device_new_raw
+        )
 
         dev_nos_for_run = [d["dev_no"] for d in device_current]  # Quelle: current
         # Ziel ist new.ids wie angegeben
