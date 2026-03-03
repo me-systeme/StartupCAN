@@ -12,6 +12,7 @@ dll:
 devices:
   config:
     assign:
+      default_canbaud: 1000000
       default_cmd_id: "0x100"
       default_ans_id: "0x101"
     current:

@@ -70,7 +70,8 @@ Wenn `devices.config.current.ids` für dieses `dev_no` eine `serial` enthält, m
 
 * 2.2 `sn != expected_sn` → Fehlerfall **2.2**
 
-Wenn `devices.config.new.ids` für alle Geräte `serial` enthält, wird über die Seriennummer gemappt.
+Wenn keine `serial` in `new.ids` konfiguriert sind, wird per `dev_no` gemappt.
+Für das Mapping per Seriennummer muss jeder Eintrag in `serial` für jedes Gerät in `new.ids` existieren. In diesem Modus muss man beim Anschließen der Geräte nicht auf die Reihenfolge (`dev_no`) achten, sondern das Gerät mit der Seriennummer `serial` erhält die entsprechenden neuen IDs aus `new.ids`.
 
 * 2.3 `_target_ids(dev_no, sn)` failed → Fehlerfall **2.3**
 
@@ -383,8 +384,8 @@ flowchart TD
 A["2. SN_MODE: Get Target IDs"]
 ```
 
-Wenn keine `serial` in `new.ids` konfiguriert sind, wird wie in Case 1 per `dev_no` gemappt (einfacher Fall).
-Es gibt in Case 2 aber auch die Option des Mappings per Seriennummer. Dafür muss jeder Eintrag in `serial` für jedes Gerät existieren. In diesem Modus muss man beim Anschließen der Geräte nicht auf die Reihenfolge (`dev_no`) achten, sondern das Gerät mit der Seriennummer `serial` erhält die entsprechenden neuen IDs aus `new.ids`. 
+Wenn keine `serial` in `new.ids` konfiguriert sind, wird per `dev_no` gemappt.
+Für das Mapping per Seriennummer muss jeder Eintrag in `serial` für jedes Gerät in `new.ids` existieren. In diesem Modus muss man beim Anschließen der Geräte nicht auf die Reihenfolge (`dev_no`) achten, sondern das Gerät mit der Seriennummer `serial` erhält die entsprechenden neuen IDs aus `new.ids`. 
 
 Wenn Schritt 2 fehlschlägt: → siehe Fehlerfall **2**.
 
