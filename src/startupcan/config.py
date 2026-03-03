@@ -144,9 +144,19 @@ def load_config(path: Path) -> dict:
             if "serial" in d and d["serial"] is not None:
                 # erlaubt int oder string
                 item["serial"] = int(str(d["serial"]).strip())
+
+            # unknown ist OPTIONAL
+            if "unknown" in d:
+                item["unknown"] = bool(d["unknown"])
+            
             out.append(item)
         return out
     
+    def _assert_unknown_is_bool(name: str, items: list[dict]):
+        bad = [d.get("dev_no") for d in (items or []) if "unknown" in d and not isinstance(d["unknown"], bool)]
+        if bad:
+            raise ValueError(f"{name}: unknown muss bool sein bei dev_no={bad}")
+
     def _assert_unique_can_fields(name: str, items: list[dict], *, strict_numbers: bool = True):
         """
         strict_numbers=True:
@@ -194,6 +204,7 @@ def load_config(path: Path) -> dict:
 
     # dev_no muss eindeutig sein
     if device_current:
+        _assert_unknown_is_bool("devices.config.current.ids", device_current)
         _assert_unique_dev_no("devices.config.current.ids", device_current)
     if device_new_raw:
         _assert_unique_dev_no("devices.config.new.ids", device_new_raw)

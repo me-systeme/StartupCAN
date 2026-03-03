@@ -87,6 +87,23 @@ def fmt_can_id(x: int) -> str:
         return f"0x{x:03X}"
     return f"0x{x:X}"
 
+UNKNOWN_HINT = (
+    "CAN-ID ist unknown. Bitte Gerät per USB anschließen und mit GSVmulti "
+    "die CAN-IDs (CMD/ANSWER) auslesen bzw. korrekt setzen."
+)
+
+def _fmt_dev(dev_no: int, serial: int | None) -> str:
+    if serial is None:
+        return f"DEV {dev_no} (SN=?)"
+    return f"DEV {dev_no} (SN={serial})"
+
+def _warn_unknown(dev_no: int, serial: int | None, *, where: str = ""):
+    tag = _fmt_dev(dev_no, serial)
+    prefix = f"[{tag}]"
+    if where:
+        prefix += f" [{where}]"
+    print(f"{prefix} ⚠️  {UNKNOWN_HINT}")
+
 def _same_ids(cmd_a: int, ans_a: int, cmd_b: int, ans_b: int) -> bool:
     return int(cmd_a) == int(cmd_b) and int(ans_a) == int(ans_b)
 
@@ -136,12 +153,6 @@ def _read_serial(gsv: GSV86CAN, dev_no: int) -> int | None:
     except Exception as e:
         print(f"[DEV {dev_no}] WARN: Seriennummer konnte nicht gelesen werden: {e}")
         return None
-
-
-def _fmt_dev(dev_no: int, serial: int | None) -> str:
-    if serial is None:
-        return f"DEV {dev_no} (SN=?)"
-    return f"DEV {dev_no} (SN={serial})"
 
 
 def _new_ids_for_serial(serial: int) -> tuple[int, int]:
@@ -528,6 +539,16 @@ def main() -> int:
         print(f"[INFO] Devices in config: {len(DEVICE_CONFIG)}")
         print("-" * 80)
 
+        unknown_in_yaml = [d for d in (DEVICE_CONFIG or []) if isinstance(d, dict) and d.get("unknown")]
+        if unknown_in_yaml:
+            print("\n" + "!" * 80)
+            print("[WARN] In current.ids sind Geräte mit unknown=true markiert.")
+            for d in unknown_in_yaml:
+                dev_no = int(d["dev_no"])
+                serial = d.get("serial")
+                _warn_unknown(dev_no, int(serial) if serial is not None else None, where="yaml-current.ids")
+            print("!" * 80 + "\n")
+
         wizard_mode = bool(CURRENT_DEFAULT_MODE)
         forced_reset_wizard = (not CURRENT_DEFAULT_MODE) and bool(NEW_DEFAULT_MODE)
 
@@ -577,11 +598,14 @@ def main() -> int:
                         if SN_MODE:
                             # target IDs sind ohne SN nicht bestimmbar → keine sinnvolle "already new" Probe
                             state = "unknown"
+                            _warn_unknown(dev_no, sn, where="activation")
                             cmd_new = DEFAULT_CMD_ID
                             ans_new = DEFAULT_ANS_ID
                         else:
                             cmd_new, ans_new = _new_ids_for(dev_no)   # target schon jetzt bekannt
                             state = _probe_state_after_fail(gsv, dev_no, DEFAULT_CMD_ID, DEFAULT_ANS_ID, cmd_new, ans_new)
+                            if state == "unknown":
+                                _warn_unknown(dev_no, sn, where="state-probe")
 
                         results.append({
                             "dev_no": dev_no,
@@ -608,6 +632,7 @@ def main() -> int:
                                     "dev_no": dev_no,
                                     "serial": sn,
                                     "ok": False,
+                                    "state": "old",
                                     "cmd_old": DEFAULT_CMD_ID,
                                     "ans_old": DEFAULT_ANS_ID,
                                     "cmd_new": DEFAULT_CMD_ID,
@@ -658,10 +683,12 @@ def main() -> int:
                             DEFAULT_CMD_ID, DEFAULT_ANS_ID,
                             cmd_new, ans_new
                         )
+                        if state == "unknown":
+                            _warn_unknown(dev_no, sn, where="state-probe")
 
                         results.append({
                             "dev_no": dev_no,
-                            "serial": sn2 if sn2 is not None else sn,
+                            "serial": sn,
                             "ok": bool(ok2),
                             "state": state,
                             "cmd_old": DEFAULT_CMD_ID,
@@ -745,6 +772,8 @@ def main() -> int:
                     ok, sn = _try_activate(gsv, dev_no, cmd_start, ans_start, tries=5, delay=0.3, read_sn=True)
                     if not ok:
                         state = _probe_state_after_fail(gsv, dev_no, cmd_start, ans_start, DEFAULT_CMD_ID, DEFAULT_ANS_ID)
+                        if state == "unknown":
+                            _warn_unknown(dev_no, sn, where="state-probe")
 
                         results.append({
                             "dev_no": dev_no,
@@ -836,9 +865,11 @@ def main() -> int:
                             cmd_start, ans_start,
                             cmd_new, ans_new
                         )
+                        if state == "unknown":
+                            _warn_unknown(dev_no, sn, where="state-probe")
 
                         results.append({
-                            "dev_no": dev_no, "serial": sn2 if sn2 is not None else sn,
+                            "dev_no": dev_no, "serial": sn,
                             "ok": bool(ok2), "state": state,
                             "cmd_old": cmd_start, "ans_old": ans_start,
                             "cmd_new": cmd_new, "ans_new": ans_new,
@@ -920,10 +951,13 @@ def main() -> int:
                         if SN_MODE:
                             # Target unbekannt ohne SN -> keine probe auf new
                             state = "unknown"
+                            _warn_unknown(dev_no, sn, where="state-probe")
                             cmd_new, ans_new = cmd_id, ans_id  # oder 0/0
                         else:
                             cmd_new, ans_new = _new_ids_for(dev_no)
                             state = _probe_state_after_fail(gsv, dev_no, cmd_id, ans_id, cmd_new, ans_new)
+                            if state == "unknown":
+                                _warn_unknown(dev_no, sn, where="state-probe")
 
                         results.append({
                             "dev_no": dev_no,
@@ -951,7 +985,7 @@ def main() -> int:
                                     "dev_no": dev_no,
                                     "serial": sn,
                                     "ok": False,
-                                    "state": "unknown",
+                                    "state": "old",
                                     "cmd_old": cmd_id,
                                     "ans_old": ans_id,
                                     "cmd_new": cmd_new,
@@ -1035,10 +1069,12 @@ def main() -> int:
                             sn = sn2
 
                         state = "new" if ok2 else _probe_state_after_fail(gsv, dev_no, cmd_id, ans_id, cmd_new, ans_new)
+                        if state == "unknown":
+                            _warn_unknown(dev_no, sn, where="state-probe")
 
                         results.append({
                             "dev_no": dev_no,
-                            "serial": sn2 if sn2 is not None else sn,
+                            "serial": sn,
                             "ok": bool(ok2),
                             "state": state,
                             "cmd_old": cmd_id,

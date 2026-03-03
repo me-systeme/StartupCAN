@@ -986,6 +986,14 @@ Diese Validierungen werden unabhängig vom Case geprüft:
 
     * Default IDs sind in der Liste `current.ids` erlaubt. Sie dürfen auch doppelt vorkommen. (Siehe **Eindeutigkeit der CAN-ID-Zahlen innerhalb einer Liste**)
 
+* **Unbekannte Geräte**
+
+    In der Liste `current.ids` kann es pro Gerät einen Eintrag `unknown=true` geben. Dabei gilt:
+
+    * Es wird trotzdem versucht, das Gerät umzustellen.
+
+    * Es gibt lediglich eine **Warnung** mit dem Hinweis, das Gerät über USB anzuschließen und die CAN ID mit GSVmulti zu suchen. 
+
 
      
 
