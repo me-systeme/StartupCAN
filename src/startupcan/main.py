@@ -345,7 +345,22 @@ def _merge_current_ids(
     out.sort(key=lambda x: int(x["dev_no"]))
     return out
 
-
+def _baseline_current_for_case2_without_serial() -> list[dict]:
+    """
+    Case 2 (Wizard): current.ids soll ALLE Geräte enthalten, die in new.ids vorkommen:
+    - noch nicht bearbeitet: DEFAULT IDs, ohne serial
+    - bearbeitet: kommt später über _merge_current_ids(updated_subset) rein (inkl. serial falls gemessen)
+    """
+    baseline: list[dict] = []
+    for d in (DEVICE_NEW or []):  # wichtig: Quelle ist new.ids
+        baseline.append({
+            "dev_no": int(d["dev_no"]),
+            "cmd_id": int(DEFAULT_CMD_ID),
+            "answer_id": int(DEFAULT_ANS_ID),
+            # absichtlich KEIN serial hier
+        })
+    baseline.sort(key=lambda x: int(x["dev_no"]))
+    return baseline
 
 def _finish_device_step(gsv: GSV86CAN, dev_no: int, serial: int | None, reason: str = ""):
     """
@@ -675,10 +690,8 @@ def main() -> int:
             _print_summary(results)
             updated_subset = _effective_current_ids_from_results(results)
 
-            # original_current kommt aus YAML current.ids
-            original_current = DEVICE_CURRENT or []
-
-            current_ids = _merge_current_ids(original_current, updated_subset)
+            baseline_current = _baseline_current_for_case2_without_serial()
+            current_ids = _merge_current_ids(baseline_current, updated_subset)
 
             # current_default bleibt wie gehabt (deine Logik)
             current_default = _all_fail(results, len(DEVICE_CONFIG))
