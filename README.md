@@ -1,5 +1,12 @@
 # StartupCAN
 
+Vorteile gegenüber GSVmulti: 
+
+* Das Gerät muss nicht neu gestartet werden
+
+* Kein Anschließen per USB und kein verwenden von GSVmulti
+
+
 ## Case 1 – Device Update (`current.default=false`, `new.default=false`)
 
 ```mermaid

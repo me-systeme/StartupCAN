@@ -251,7 +251,7 @@ class GSV86CAN:
     # -------------------------------------------------------------------------
     # Device setup / configuration
     # -------------------------------------------------------------------------
-    def activate(self, dev_no: int, cmd_id: int, answer_id: int) -> int:
+    def activate(self, dev_no: int, cmd_id: int, answer_id: int, *, canbaud: int | None = None) -> int:
         """
         Activate a device on the CAN bus and configure its IDs.
 
@@ -278,11 +278,13 @@ class GSV86CAN:
         RuntimeError
             If the DLL returns GSV_ERROR.
         """
+        if canbaud is None:
+            canbaud = CANBAUD
         chan_no = ct.c_int(0)
         r = self.dll.GSV86CANactivateExtended(
             dev_no,
             CANADAPTERTYPE_PCAN,
-            CANBAUD,
+            int(canbaud),
             MYBUFFERSIZE,
             ct.byref(chan_no),
             cmd_id,

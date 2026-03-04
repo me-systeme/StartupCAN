@@ -39,8 +39,10 @@ from startupcan.gsv86can import (
     GSV86CAN,
     CANSET_CAN_IN_CMD_ID,
     CANSET_CAN_OUT_ANS_ID,
+    CANSET_CAN_BAUD_HZ,
 )
 
+from startupcan.config import DEFAULT_CANBAUD, CANBAUD
 
 # ---------------------------------------------------------------------------
 # TODO: Diese Indizes musst du passend zur DLL/Device-Doku setzen!
@@ -165,18 +167,20 @@ def _new_ids_for_serial(serial: int) -> tuple[int, int]:
     raise KeyError(f"Keine new.ids Zuordnung für SN={serial} gefunden")
 
 
-def _verify_ids(gsv: GSV86CAN, dev_no: int, serial: int | None, exp_cmd: int, exp_ans: int):
+def _verify_ids(gsv: GSV86CAN, dev_no: int, serial: int | None, exp_cmd: int, exp_ans: int, exp_canbaud: int):
     try:
         cmd_read = gsv.get_can_settings(dev_no, IDX_CAN_CMD_ID)
         ans_read = gsv.get_can_settings(dev_no, IDX_CAN_ANSWER_ID)
+        canbaud_read = gsv.get_can_settings(dev_no,IDX_CAN_BAUD)
 
-        ok = (cmd_read == exp_cmd and ans_read == exp_ans)
+        ok = (cmd_read == exp_cmd and ans_read == exp_ans and canbaud_read == exp_canbaud)
         tag = _fmt_dev(dev_no, serial)
         print(f"[{tag}] verify CMD_ID   = {fmt_can_id(cmd_read)} (raw={cmd_read})")
         print(f"[{tag}] verify ANSWER_ID= {fmt_can_id(ans_read)} (raw={ans_read})")
+        print(f"[{tag}] verify CANBAUD= {canbaud_read}")
         if not ok:
             print(f"[{tag}] WARN: verify differs from expected "
-                  f"(expected CMD={fmt_can_id(exp_cmd)} ANS={fmt_can_id(exp_ans)})")
+                  f"(expected CMD={fmt_can_id(exp_cmd)} ANS={fmt_can_id(exp_ans)} CANBAUD={exp_canbaud})")
         return ok
     except Exception as e:
         print(f"[{_fmt_dev(dev_no, serial)}] WARN: verify failed: {e}")
@@ -188,6 +192,7 @@ def _set_ids_reset_reactivate_verify_release(
     serial: int | None,
     cmd_new: int,
     ans_new: int,
+    baud_new: int | None = None
 ) -> tuple[bool, int | None]:
     """
     Setzt neue IDs, macht reset, verbindet nochmal mit den neuen IDs,
@@ -213,6 +218,10 @@ def _set_ids_reset_reactivate_verify_release(
         gsv.set_can_settings(dev_no, CANSET_CAN_IN_CMD_ID, cmd_new)
         gsv.set_can_settings(dev_no, CANSET_CAN_OUT_ANS_ID, ans_new)
 
+        if baud_new is not None:
+            print(f"[{_fmt_dev(dev_no, serial)}] set NEW BAUD: {baud_new}")
+            gsv.set_can_settings(dev_no, CANSET_CAN_BAUD_HZ, int(baud_new))
+
         # Änderungen wirksam machen
         gsv.reset_device(dev_no)
         time.sleep(2)
@@ -221,15 +230,17 @@ def _set_ids_reset_reactivate_verify_release(
         _safe_release(gsv, dev_no, where="after reset")
         time.sleep(0.2)
 
-        print(f"[{_fmt_dev(dev_no, serial)}] Re-activation after setting can ids: CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)}")
-        ok, sn2 = _try_activate(gsv, dev_no, cmd_new, ans_new, tries=8, delay=0.5, read_sn=True, verbose=False)
+        activate_baud = baud_new if baud_new is not None else CANBAUD
+
+        print(f"[{_fmt_dev(dev_no, serial)}] Re-activation after setting can ids: CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)} CANBAUD={activate_baud}")
+        ok, sn2 = _try_activate(gsv, dev_no, cmd_new, ans_new, canbaud=activate_baud, tries=8, delay=0.5, read_sn=True, verbose=False)
         if not ok:
             print(f"[{_fmt_dev(dev_no, serial)}] Re-activation with CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)} failed.")
             return False, serial
 
         sn_out = sn2 if sn2 is not None else serial
 
-        ok_verify = _verify_ids(gsv, dev_no, sn_out, cmd_new, ans_new)
+        ok_verify = _verify_ids(gsv, dev_no, sn_out, cmd_new, ans_new, activate_baud)
 
         if not ok_verify:
             print(f"[{_fmt_dev(dev_no, sn_out)}] WARN: Verify nach Re-Activate stimmt nicht "
@@ -385,8 +396,8 @@ def _finish_device_step(gsv: GSV86CAN, dev_no: int, serial: int | None, reason: 
 
     _pause(f"➡️  Bitte dieses Gerät {tag} JETZT vom Bus abnehmen/abschrauben, dann ENTER ...")
 
-def _try_activate_n(gsv, dev_no, cmd, ans, tries=5, delay=0.3) -> bool:
-    ok, _ = _try_activate(gsv, dev_no, cmd, ans, tries=tries, delay=delay, read_sn=False, verbose=False)
+def _try_activate_n(gsv, dev_no, cmd, ans, *, canbaud: int | None = None, tries=5, delay=0.3) -> bool:
+    ok, _ = _try_activate(gsv, dev_no, cmd, ans, canbaud=canbaud, tries=tries, delay=delay, read_sn=False, verbose=False)
     return ok
 
 def _try_activate(
@@ -394,6 +405,8 @@ def _try_activate(
     dev_no: int,
     cmd: int,
     ans: int,
+    *,
+    canbaud: int | None = None,
     tries: int = 5,
     delay: float = 0.3,
     read_sn: bool = True,
@@ -405,12 +418,14 @@ def _try_activate(
     """
     last_err = None
     
+    if canbaud is None:
+        canbaud = CANBAUD
 
     for i in range(tries):
         if verbose:
-            print(f"[DEV {dev_no}] activate try {i+1}/{tries}: CMD={fmt_can_id(cmd)} ANS={fmt_can_id(ans)}")
+            print(f"[DEV {dev_no}] activate try {i+1}/{tries}: BAUD={canbaud} CMD={fmt_can_id(cmd)} ANS={fmt_can_id(ans)}")
         try:
-            gsv.activate(dev_no, cmd, ans)
+            gsv.activate(dev_no, cmd, ans, canbaud=canbaud)
             _set_handle_active(dev_no, True)
             # sn = None
             sn = _read_serial(gsv, dev_no) if read_sn else None
@@ -435,36 +450,51 @@ def _probe_state_after_fail(
     dev_no: int,
     cmd_old: int, ans_old: int,
     cmd_new: int, ans_new: int,
+    *,
+    baud_old: int | None = None,
+    baud_new: int | None = None,
 ) -> str:
     """
     Best-effort: herausfinden, welche IDs gerade wirklich aktiv sind.
     Returns: "old" | "new" | "unknown"
     """
 
+    # Fallbacks: wenn None => sinnvoller Default
+    if baud_old is None:
+        baud_old = CANBAUD
+    if baud_new is None:
+        baud_new = CANBAUD
+
     _safe_release(gsv, dev_no, where="probe:pre")
     time.sleep(0.3)  
 
-    # 1) old testen
-    # cmd_old = 264    # 0x108
-    # ans_old = 265    # 0x109
-    print(f"[DEV {dev_no}] Starting probe state=old: CMD={fmt_can_id(cmd_old)} ANS={fmt_can_id(ans_old)}")
-    ok_old = _try_activate_n(gsv, dev_no, cmd_old, ans_old)
-    if ok_old:
-        print(f"[DEV {dev_no}] Probe state=old was successfull. Die current IDs im YAML bleiben auf den alten IDs.")
-        _safe_release(gsv, dev_no, where="probe:old-ok")
+    def _probe(label: str, cmd: int, ans: int, baud: int) -> bool:
+        print(f"[DEV {dev_no}] Probe {label}: BAUD={baud} CMD={fmt_can_id(cmd)} ANS={fmt_can_id(ans)}")
+        ok = _try_activate_n(gsv, dev_no, cmd, ans, canbaud=baud, tries=5, delay=0.3)
+        if ok:
+            _safe_release(gsv, dev_no, where=f"probe:{label}-ok")
+        return ok
+
+    # 1) old@baud_old
+    if _probe("old@oldbaud", cmd_old, ans_old, baud_old):
+        print(f"[DEV {dev_no}] Probe success: state=old")
         return "old"
 
-    print(f"[DEV {dev_no}] Starting probe state=new: CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)}")
-    # 2) new testen
-    # cmd_new = 264    # 0x108
-    # ans_new = 265    # 0x109
-    ok_new = _try_activate_n(gsv, dev_no, cmd_new, ans_new)
-    if ok_new:
-        print(f"[DEV {dev_no}] Probe state=new was successfull. Die current IDs im YAML werden mit den neuen IDs überschrieben.")
-        _safe_release(gsv, dev_no, where="probe:new-ok")
+    # 2) new@baud_new
+    if _probe("new@newbaud", cmd_new, ans_new, baud_new):
+        print(f"[DEV {dev_no}] Probe success: state=new")
         return "new"
+    
+    # 3) Cross-checks nur wenn die Baudraten verschieden sind
+    if int(baud_old) != int(baud_new):
+        if _probe("old@newbaud", cmd_old, ans_old, baud_new):
+            print(f"[DEV {dev_no}] Probe success: state=old (baud mismatch case)")
+            return "old"
+        if _probe("new@oldbaud", cmd_new, ans_new, baud_old):
+            print(f"[DEV {dev_no}] Probe success: state=new (baud mismatch case)")
+            return "new"
 
-    print(f"[DEV {dev_no}] Probes state=old and state=new failed. CAN IDs are unknown. Die current IDs im YAML bleiben auf den alten IDs und es wird unknown=true gesetzt.")
+    print(f"[DEV {dev_no}] Probes failed (old/new and cross). CAN IDs are unknown.")
     return "unknown"
 
 def _write_updated_yaml(
@@ -592,7 +622,7 @@ def main() -> int:
                     # else: 
                     #     ok, sn = _try_activate(gsv, dev_no, DEFAULT_CMD_ID, DEFAULT_ANS_ID, tries=5, delay=0.3, read_sn=True)
                     # Aktivieren immer mit Default IDs
-                    ok, sn = _try_activate(gsv, dev_no, DEFAULT_CMD_ID, DEFAULT_ANS_ID, tries=5, delay=0.3, read_sn=True)
+                    ok, sn = _try_activate(gsv, dev_no, DEFAULT_CMD_ID, DEFAULT_ANS_ID, canbaud=DEFAULT_CANBAUD, tries=5, delay=0.3, read_sn=True)
 
                     if not ok:
                         if SN_MODE:
@@ -603,7 +633,7 @@ def main() -> int:
                             ans_new = DEFAULT_ANS_ID
                         else:
                             cmd_new, ans_new = _new_ids_for(dev_no)   # target schon jetzt bekannt
-                            state = _probe_state_after_fail(gsv, dev_no, DEFAULT_CMD_ID, DEFAULT_ANS_ID, cmd_new, ans_new)
+                            state = _probe_state_after_fail(gsv, dev_no, DEFAULT_CMD_ID, DEFAULT_ANS_ID, cmd_new, ans_new, baud_old=DEFAULT_CANBAUD, baud_new=CANBAUD)
                             if state == "unknown":
                                 _warn_unknown(dev_no, sn, where="state-probe")
 
@@ -667,12 +697,12 @@ def main() -> int:
                             
                     if not skip_programming:
                         # optional: verify start
-                        ok = _verify_ids(gsv, dev_no, sn, DEFAULT_CMD_ID, DEFAULT_ANS_ID)
+                        ok = _verify_ids(gsv, dev_no, sn, DEFAULT_CMD_ID, DEFAULT_ANS_ID, DEFAULT_CANBAUD)
 
                         if not ok:
                             print(f"[{_fmt_dev(dev_no, sn)}] WARN: Start-IDs stimmen nicht (trotz activation).")
 
-                        ok2, sn2 = _set_ids_reset_reactivate_verify_release(gsv, dev_no, sn, cmd_new, ans_new)
+                        ok2, sn2 = _set_ids_reset_reactivate_verify_release(gsv, dev_no, sn, cmd_new, ans_new, baud_new=CANBAUD)
 
                         if sn2 is not None:
                             sn = sn2
@@ -681,7 +711,8 @@ def main() -> int:
                         state = "new" if ok2 else _probe_state_after_fail(
                             gsv, dev_no,
                             DEFAULT_CMD_ID, DEFAULT_ANS_ID,
-                            cmd_new, ans_new
+                            cmd_new, ans_new, baud_old=DEFAULT_CANBAUD,
+                            baud_new=CANBAUD,
                         )
                         if state == "unknown":
                             _warn_unknown(dev_no, sn, where="state-probe")
@@ -696,16 +727,11 @@ def main() -> int:
                             "cmd_new": cmd_new,
                             "ans_new": ans_new,
                         })
-
+                        
                         if ok2:
-                            print(f"[WIZARD] ✅ {_fmt_dev(dev_no, sn2)} umgestellt.")
-
-                            disconnect_reason = "OK. Bitte Gerät abnehmen (Safety: immer nur eins am Bus)."
-                            
-
+                            disconnect_reason = "✅ OK: Gerät wurde auf die neuen IDs umgestellt. Bitte abnehmen."
                         else:
-                            # bei Fail willst du ziemlich sicher: Gerät abnehmen (weil Zustand unklar / evtl Default)
-                            disconnect_reason = "FEHLER: Umstellung fehlgeschlagen."
+                            disconnect_reason = f"FEHLER: Umstellung fehlgeschlagen (state={state}). Bitte abnehmen."
                         
                 finally:
                     
@@ -769,9 +795,9 @@ def main() -> int:
                     expected_sn = d.get("serial") if isinstance(d, dict) else None
 
                     # 1) activate mit current IDs
-                    ok, sn = _try_activate(gsv, dev_no, cmd_start, ans_start, tries=5, delay=0.3, read_sn=True)
+                    ok, sn = _try_activate(gsv, dev_no, cmd_start, ans_start, canbaud=CANBAUD, tries=5, delay=0.3, read_sn=True)
                     if not ok:
-                        state = _probe_state_after_fail(gsv, dev_no, cmd_start, ans_start, DEFAULT_CMD_ID, DEFAULT_ANS_ID)
+                        state = _probe_state_after_fail(gsv, dev_no, cmd_start, ans_start, DEFAULT_CMD_ID, DEFAULT_ANS_ID, baud_old=CANBAUD, baud_new=DEFAULT_CANBAUD)
                         if state == "unknown":
                             _warn_unknown(dev_no, sn, where="state-probe")
 
@@ -849,13 +875,13 @@ def main() -> int:
                             
                     if not skip_programming:
                         # optional: verify start
-                        ok = _verify_ids(gsv, dev_no, sn, cmd_start, ans_start)
+                        ok = _verify_ids(gsv, dev_no, sn, cmd_start, ans_start, CANBAUD)
 
                         if not ok:
                             print(f"[{_fmt_dev(dev_no, sn)}] WARN: Start-IDs stimmen nicht (trotz activation).")
 
                         # 2-5) set default, reset, release, reactivate default, verify, release
-                        ok2, sn2 = _set_ids_reset_reactivate_verify_release(gsv, dev_no, sn, cmd_new, ans_new)
+                        ok2, sn2 = _set_ids_reset_reactivate_verify_release(gsv, dev_no, sn, cmd_new, ans_new, baud_new=DEFAULT_CANBAUD)
 
                         if sn2 is not None:
                             sn = sn2
@@ -863,7 +889,8 @@ def main() -> int:
                         state = "new" if ok2 else _probe_state_after_fail(
                             gsv, dev_no,
                             cmd_start, ans_start,
-                            cmd_new, ans_new
+                            cmd_new, ans_new,
+                            baud_old=CANBAUD, baud_new=DEFAULT_CANBAUD
                         )
                         if state == "unknown":
                             _warn_unknown(dev_no, sn, where="state-probe")
@@ -876,7 +903,7 @@ def main() -> int:
                         })
 
                         if ok2:
-                            disconnect_reason = "OK: Gerät ist jetzt DEFAULT. Bitte abnehmen."
+                            disconnect_reason = "✅ OK: Gerät ist jetzt DEFAULT. Bitte abnehmen."
                         else:
                             disconnect_reason = f"FEHLER: Reset auf DEFAULT fehlgeschlagen (state={state}). Bitte abnehmen."
 
@@ -946,7 +973,7 @@ def main() -> int:
 
                     expected_sn = d.get("serial") if isinstance(d, dict) else None
 
-                    ok, sn = _try_activate(gsv, dev_no, cmd_id, ans_id, tries=5, delay=0.3, read_sn=True)
+                    ok, sn = _try_activate(gsv, dev_no, cmd_id, ans_id, canbaud=CANBAUD, tries=5, delay=0.3, read_sn=True)
                     if not ok:
                         if SN_MODE:
                             # Target unbekannt ohne SN -> keine probe auf new
@@ -1041,7 +1068,7 @@ def main() -> int:
                                 
                     if not skip_programming:
                         # Optional: prüfen
-                        ok = _verify_ids(gsv, dev_no, sn, cmd_id, ans_id)
+                        ok = _verify_ids(gsv, dev_no, sn, cmd_id, ans_id, CANBAUD)
 
                         if not ok:
                             print(f"[{_fmt_dev(dev_no, sn)}] WARN: Start-IDs stimmen nicht (trotz activation).")
@@ -1084,7 +1111,11 @@ def main() -> int:
                         })
                         print("-" * 80)
 
-                        disconnect_reason = "Weiter mit nächstem Gerät."
+                        if ok2:
+                            disconnect_reason = "✅ OK: Gerät wurde auf die neuen IDs umgestellt. Bitte abnehmen."
+                        else:
+                            disconnect_reason = f"FEHLER: Reset auf DEFAULT fehlgeschlagen (state={state}). Bitte abnehmen."
+
                 finally:
                     _disconnect_one(gsv, dev_no, sn, reason=disconnect_reason)
                 
@@ -1121,6 +1152,8 @@ def main() -> int:
             
             return 0 
 
+    except Exception as e:
+        print(f"FEHLER im Geräte-Workflow: {e}")
     finally:
         try:
             gsv.release(0)

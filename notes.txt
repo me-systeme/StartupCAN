@@ -50,3 +50,6 @@ es muss nur dann immer gut und genau darauf hingewiesen werden, wann die devices
 [DEV 2] activate FAIL after 5 tries: GSV86DLL: invalid devicehandle [805306625] (Code=805306625)
 
 passiert immer nachdem ein device erfolgreich umgestellt wurde
+
+
+ich brauche doch noch einen canbaud eintrag in current.ids. Denn: wenn ich current.default=false und new.default=true mache und ich nach dem ersten gerät abbreche, ist ja weiterhin current.default=false aber das erste gerät hat schon baud=1000000 und die anderen geräte haben noch baud=250000. deshalb wäre es gut, wenn die liste current.ids mit dem neuen canbaud für dieses gerät aktualisiert wird. und beim aktivieren mit current.default=false wird dann der canbaud eintrag in dem device genommen und nicht dll.canbaud. Zusammengefasst: es muss doch canbaud einträge in den devices zugelassen werden. sie sind aber kein muss. wenn current.default=false gibt es den fallback auf dll.canbaud (also wenn es keinen canbaud eintrag gibt). Also: der canbaud eintrag überschreibt dll.canbaud. wenn current.default=false wird als fallback dll.canbaud genommen. wenn current.default=true, wird als fallback default_canbaud genommen. 

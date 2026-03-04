@@ -118,6 +118,13 @@ def load_config(path: Path) -> dict:
     assign = cfg_block.get("assign", {}) or {}
     default_cmd_id = _parse_hex(assign.get("default_cmd_id", "0x100"))
     default_ans_id = _parse_hex(assign.get("default_ans_id", "0x101"))
+    default_canbaud = int(assign.get("default_canbaud", 1000000))
+
+    _ALLOWED_CAN_BAUDS = {1000000, 500000, 250000, 125000, 100000, 50000, 25000}
+    if default_canbaud not in _ALLOWED_CAN_BAUDS:
+        raise ValueError(f"devices.config.assign.default_canbaud={default_canbaud} ist ungültig.")
+    if canbaud not in _ALLOWED_CAN_BAUDS:
+        raise ValueError(f"dll.canbaud={canbaud} ist ungültig.")
 
     if int(default_cmd_id) == int(default_ans_id):
         raise ValueError(
@@ -398,7 +405,7 @@ def load_config(path: Path) -> dict:
         "DEVICE_CONFIG": device_config,
         "DEVICE_CURRENT": device_current,   # optional
         "DEVICE_NEW": device_new,           # Ziel-IDs
-        "ASSIGN": {"DEFAULT_CMD_ID": default_cmd_id, "DEFAULT_ANS_ID": default_ans_id},
+        "ASSIGN": {"DEFAULT_CMD_ID": default_cmd_id, "DEFAULT_ANS_ID": default_ans_id, "DEFAULT_CANBAUD": default_canbaud,},
         "IGNORE_NEW_SERIALS": bool(IGNORE_NEW_SERIALS),
     }
 
@@ -447,4 +454,5 @@ DEVICE_NEW = CONFIG["DEVICE_NEW"]
 ASSIGN = CONFIG["ASSIGN"]
 DEFAULT_CMD_ID = ASSIGN["DEFAULT_CMD_ID"]
 DEFAULT_ANS_ID = ASSIGN["DEFAULT_ANS_ID"]
+DEFAULT_CANBAUD = ASSIGN["DEFAULT_CANBAUD"]
 IGNORE_NEW_SERIALS = CONFIG["IGNORE_NEW_SERIALS"]
