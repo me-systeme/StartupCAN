@@ -660,11 +660,11 @@ def main() -> int:
             for d in DEVICE_CONFIG:
                 dev_no = int(d["dev_no"])
 
-                _connect_one(dev_no)
-
                 sn = None
                 skip_programming = False
                 disconnect_reason = "Weiter mit nächstem Gerät."
+                cmd_new = None
+                ans_new = None
 
                 try: 
                     # if dev_no == 1:
@@ -674,6 +674,9 @@ def main() -> int:
                     # else: 
                     #     ok, sn = _try_activate(gsv, dev_no, DEFAULT_CMD_ID, DEFAULT_ANS_ID, tries=5, delay=0.3, read_sn=True)
                     # Aktivieren immer mit Default IDs
+
+                    _connect_one(dev_no)
+
                     ok, sn = _try_activate(gsv, dev_no, DEFAULT_CMD_ID, DEFAULT_ANS_ID, canbaud=DEFAULT_CANBAUD, tries=5, delay=0.3, read_sn=True)
 
                     if not ok:
@@ -791,10 +794,8 @@ def main() -> int:
                     # => old = DEFAULT IDs @ DEFAULT_CANBAUD
                     # => new = cmd_new/ans_new @ CANBAUD
                     # cmd_new/ans_new müssen dafür definiert sein:
-                    if 'cmd_new' not in locals() or 'ans_new' not in locals():
-                        # best-effort: wenn wir Ziel nicht bestimmen konnten, nimm default als placeholder
-                        cmd_new = int(DEFAULT_CMD_ID)
-                        ans_new = int(DEFAULT_ANS_ID)
+                    if cmd_new is None or ans_new is None:
+                        cmd_new, ans_new = DEFAULT_CMD_ID, DEFAULT_ANS_ID
 
                     disconnect_reason = _device_fail(
                         gsv=gsv,
@@ -861,7 +862,6 @@ def main() -> int:
                 cmd_new = int(DEFAULT_CMD_ID)
                 ans_new = int(DEFAULT_ANS_ID)
 
-                _connect_one(dev_no)
 
                 sn = None
                 skip_programming = False
@@ -869,6 +869,8 @@ def main() -> int:
                 disconnect_reason = "Weiter mit nächstem Gerät."
 
                 try:
+                    _connect_one(dev_no)
+
                     expected_sn = d.get("serial") if isinstance(d, dict) else None
 
                     # 1) activate mit current IDs
@@ -1054,15 +1056,16 @@ def main() -> int:
                 cmd_id = int(d["cmd_id"])
                 ans_id = int(d["answer_id"])
                 
-                _connect_one(dev_no)
-
                 sn = None
+                cmd_new = None
+                ans_new = None
 
                 skip_programming = False
 
                 disconnect_reason = "Weiter mit nächstem Gerät."
 
                 try: 
+                    _connect_one(dev_no)
 
                     expected_sn = d.get("serial") if isinstance(d, dict) else None
 
@@ -1211,7 +1214,7 @@ def main() -> int:
 
                 except Exception as e:
                     # old=current IDs @ CANBAUD, new=target IDs @ CANBAUD (keine baud-änderung!)
-                    if 'cmd_new' not in locals() or 'ans_new' not in locals():
+                    if cmd_new is None or ans_new is None:
                         # wenn Ziel nicht bestimmbar war, nimm current als placeholder
                         cmd_new = int(cmd_id)
                         ans_new = int(ans_id)
@@ -1266,8 +1269,6 @@ def main() -> int:
             
             return 0 
 
-    except Exception as e:
-        print(f"FEHLER im Geräte-Workflow: {e}")
     finally:
         try:
             gsv.release(0)
