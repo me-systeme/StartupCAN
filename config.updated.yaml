@@ -32,4 +32,13 @@ devices:
           answer_id: '0x107'
     new:
       default: false
-      ids: []
+      ids:
+        - dev_no: 1
+          cmd_id: "0x202"
+          answer_id: "0x203"
+        - dev_no: 2
+          cmd_id: "0x204"
+          answer_id: "0x205"
+        - dev_no: 3
+          cmd_id: "0x206"
+          answer_id: "0x207"

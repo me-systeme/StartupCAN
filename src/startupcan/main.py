@@ -497,6 +497,58 @@ def _probe_state_after_fail(
     print(f"[DEV {dev_no}] Probes failed (old/new and cross). CAN IDs are unknown.")
     return "unknown"
 
+def _device_fail(
+    *,
+    gsv: GSV86CAN,
+    results: list[dict],
+    dev_no: int,
+    sn: int | None,
+    err: Exception,
+    cmd_old: int,
+    ans_old: int,
+    cmd_new: int,
+    ans_new: int,
+    baud_old: int,
+    baud_new: int,
+    where: str,
+) -> str:
+    """
+    Einheitliches Fehlerhandling pro Device:
+    - prints
+    - state probe (best effort)
+    - results append
+    - returns disconnect_reason
+    """
+    print(f"[DEV {dev_no}] FEHLER ({where}): {err}")
+
+    state = "unknown"
+    try:
+        state = _probe_state_after_fail(
+            gsv, dev_no,
+            cmd_old, ans_old,
+            cmd_new, ans_new,
+            baud_old=baud_old,
+            baud_new=baud_new,
+        )
+    except Exception as e2:
+        print(f"[DEV {dev_no}] WARN: state-probe failed: {e2}")
+
+    if state == "unknown":
+        _warn_unknown(dev_no, sn, where=f"{where}/state-probe")
+
+    results.append({
+        "dev_no": dev_no,
+        "serial": sn,
+        "ok": False,
+        "state": state,
+        "cmd_old": cmd_old,
+        "ans_old": ans_old,
+        "cmd_new": cmd_new,
+        "ans_new": ans_new,
+    })
+
+    return f"FEHLER: {err} (state={state}). Bitte Gerät abnehmen."
+
 def _write_updated_yaml(
     src_path: Path,
     dst_path: Path,
@@ -732,7 +784,32 @@ def main() -> int:
                             disconnect_reason = "✅ OK: Gerät wurde auf die neuen IDs umgestellt. Bitte abnehmen."
                         else:
                             disconnect_reason = f"FEHLER: Umstellung fehlgeschlagen (state={state}). Bitte abnehmen."
-                        
+                except Exception as e:
+                    # erwartbare Werte in Case 2:
+                    # - wir aktivieren am Anfang mit DEFAULT IDs @ DEFAULT_CANBAUD
+                    # - wir programmieren auf cmd_new/ans_new und setzen BAUD auf CANBAUD
+                    # => old = DEFAULT IDs @ DEFAULT_CANBAUD
+                    # => new = cmd_new/ans_new @ CANBAUD
+                    # cmd_new/ans_new müssen dafür definiert sein:
+                    if 'cmd_new' not in locals() or 'ans_new' not in locals():
+                        # best-effort: wenn wir Ziel nicht bestimmen konnten, nimm default als placeholder
+                        cmd_new = int(DEFAULT_CMD_ID)
+                        ans_new = int(DEFAULT_ANS_ID)
+
+                    disconnect_reason = _device_fail(
+                        gsv=gsv,
+                        results=results,
+                        dev_no=dev_no,
+                        sn=sn,
+                        err=e,
+                        cmd_old=int(DEFAULT_CMD_ID),
+                        ans_old=int(DEFAULT_ANS_ID),
+                        cmd_new=int(cmd_new),
+                        ans_new=int(ans_new),
+                        baud_old=int(DEFAULT_CANBAUD),
+                        baud_new=int(CANBAUD),
+                        where="case2/wizard",
+                    )
                 finally:
                     
                     _disconnect_one(gsv, dev_no, sn, reason=disconnect_reason)
@@ -907,7 +984,23 @@ def main() -> int:
                         else:
                             disconnect_reason = f"FEHLER: Reset auf DEFAULT fehlgeschlagen (state={state}). Bitte abnehmen."
 
-                    
+                except Exception as e:
+                    # old = current IDs @ CANBAUD
+                    # new = DEFAULT IDs @ DEFAULT_CANBAUD
+                    disconnect_reason = _device_fail(
+                        gsv=gsv,
+                        results=results,
+                        dev_no=dev_no,
+                        sn=sn,
+                        err=e,
+                        cmd_old=int(cmd_start),
+                        ans_old=int(ans_start),
+                        cmd_new=int(DEFAULT_CMD_ID),
+                        ans_new=int(DEFAULT_ANS_ID),
+                        baud_old=int(CANBAUD),
+                        baud_new=int(DEFAULT_CANBAUD),
+                        where="case3/reset-to-default",
+                    )
                     
                 finally:
                     _disconnect_one(gsv, dev_no, sn, reason=disconnect_reason)
@@ -1116,6 +1209,27 @@ def main() -> int:
                         else:
                             disconnect_reason = f"FEHLER: Reset auf DEFAULT fehlgeschlagen (state={state}). Bitte abnehmen."
 
+                except Exception as e:
+                    # old=current IDs @ CANBAUD, new=target IDs @ CANBAUD (keine baud-änderung!)
+                    if 'cmd_new' not in locals() or 'ans_new' not in locals():
+                        # wenn Ziel nicht bestimmbar war, nimm current als placeholder
+                        cmd_new = int(cmd_id)
+                        ans_new = int(ans_id)
+
+                    disconnect_reason = _device_fail(
+                        gsv=gsv,
+                        results=results,
+                        dev_no=dev_no,
+                        sn=sn,
+                        err=e,
+                        cmd_old=int(cmd_id),
+                        ans_old=int(ans_id),
+                        cmd_new=int(cmd_new),
+                        ans_new=int(ans_new),
+                        baud_old=int(CANBAUD),
+                        baud_new=int(CANBAUD),
+                        where="case1/reprogram",
+                    )
                 finally:
                     _disconnect_one(gsv, dev_no, sn, reason=disconnect_reason)
                 
