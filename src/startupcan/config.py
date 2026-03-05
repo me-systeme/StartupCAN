@@ -121,6 +121,18 @@ def load_config(path: Path) -> dict:
     default_canbaud = int(assign.get("default_canbaud", 1000000))
 
     _ALLOWED_CAN_BAUDS = {1000000, 500000, 250000, 125000, 100000, 50000, 25000}
+
+    def _assert_canbaud_allowed(name: str, items: list[dict]):
+        bad = []
+        for d in (items or []):
+            if "canbaud" in d and d["canbaud"] is not None:
+                cb = int(d["canbaud"])
+                if cb not in _ALLOWED_CAN_BAUDS:
+                    bad.append((int(d["dev_no"]), cb))
+        if bad:
+            raise ValueError(f"{name}: ungültige canbaud Werte: {bad}")
+    
+
     if default_canbaud not in _ALLOWED_CAN_BAUDS:
         raise ValueError(f"devices.config.assign.default_canbaud={default_canbaud} ist ungültig.")
     if canbaud not in _ALLOWED_CAN_BAUDS:
@@ -155,6 +167,10 @@ def load_config(path: Path) -> dict:
             # unknown ist OPTIONAL
             if "unknown" in d:
                 item["unknown"] = bool(d["unknown"])
+            
+            # canbaud ist OPTIONAL (nur current.ids relevant)
+            if "canbaud" in d and d["canbaud"] is not None:
+                item["canbaud"] = int(str(d["canbaud"]).strip())
             
             out.append(item)
         return out
@@ -213,6 +229,7 @@ def load_config(path: Path) -> dict:
     if device_current:
         _assert_unknown_is_bool("devices.config.current.ids", device_current)
         _assert_unique_dev_no("devices.config.current.ids", device_current)
+        _assert_canbaud_allowed("devices.config.current.ids", device_current)
     if device_new_raw:
         _assert_unique_dev_no("devices.config.new.ids", device_new_raw)
 

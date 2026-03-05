@@ -53,3 +53,27 @@ passiert immer nachdem ein device erfolgreich umgestellt wurde
 
 
 ich brauche doch noch einen canbaud eintrag in current.ids. Denn: wenn ich current.default=false und new.default=true mache und ich nach dem ersten gerät abbreche, ist ja weiterhin current.default=false aber das erste gerät hat schon baud=1000000 und die anderen geräte haben noch baud=250000. deshalb wäre es gut, wenn die liste current.ids mit dem neuen canbaud für dieses gerät aktualisiert wird. und beim aktivieren mit current.default=false wird dann der canbaud eintrag in dem device genommen und nicht dll.canbaud. Zusammengefasst: es muss doch canbaud einträge in den devices zugelassen werden. sie sind aber kein muss. wenn current.default=false gibt es den fallback auf dll.canbaud (also wenn es keinen canbaud eintrag gibt). Also: der canbaud eintrag überschreibt dll.canbaud. wenn current.default=false wird als fallback dll.canbaud genommen. wenn current.default=true, wird als fallback default_canbaud genommen. 
+
+letzter test case1 :
+
+Wenn angeschlossen:
+➡️  ENTER drücken, um fortzufahren ...
+[DEV 3] activate try 1/5: BAUD=1000000 CMD=0x206 ANS=0x207
+[DEV 3 (SN=25455439)] activate OK
+[DEV 3 (SN=25455439)] Ziel-IDs per dev_no-Mapping.
+[DEV 3 (SN=25455439)] verify CMD_ID   = 0x206 (raw=518)
+[DEV 3 (SN=25455439)] verify ANSWER_ID= 0x207 (raw=519)
+[DEV 3 (SN=25455439)] verify CANBAUD= 1000000
+[DEV 3 (SN=25455439)] set NEW IDs: CMD=0x206 ANS=0x207
+[DEV 3 (SN=25455439)] Re-activation after setting can ids: CMD=0x206 ANS=0x207 CANBAUD=250000
+[DEV 3 (SN=25455439)] verify CMD_ID   = 0x206 (raw=518)
+[DEV 3 (SN=25455439)] verify ANSWER_ID= 0x207 (raw=519)
+[DEV 3 (SN=25455439)] verify CANBAUD= 1000000
+[DEV 3 (SN=25455439)] WARN: verify differs from expected (expected CMD=0x206 ANS=0x207 CANBAUD=250000)
+[DEV 3 (SN=25455439)] WARN: Verify nach Re-Activate stimmt nicht (expected CMD=0x206 ANS=0x207).
+[DEV 3] Probe old@oldbaud: BAUD=1000000 CMD=0x206 ANS=0x207
+[DEV 3] Probe success: state=old
+--------------------------------------------------------------------------------
+[DEV 3 (SN=25455439)] FEHLER: Reset auf DEFAULT fehlgeschlagen (state=old). Bitte abnehmen.
+➡️  Bitte dieses Gerät DEV 3 (SN=25455439) JETZT vom Bus abnehmen/abschrauben, dann ENTER ...
+➡️  ENTER drücken, um fortzufahren ...

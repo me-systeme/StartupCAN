@@ -103,8 +103,8 @@ def _warn_unknown(dev_no: int, serial: int | None, *, where: str = ""):
         prefix += f" [{where}]"
     print(f"{prefix} ⚠️  {UNKNOWN_HINT}")
 
-def _same_ids(cmd_a: int, ans_a: int, cmd_b: int, ans_b: int) -> bool:
-    return int(cmd_a) == int(cmd_b) and int(ans_a) == int(ans_b)
+def _same_ids(cmd_a: int, ans_a: int, cmd_b: int, ans_b: int, baud_a: int, baud_b: int) -> bool:
+    return int(cmd_a) == int(cmd_b) and int(ans_a) == int(ans_b) and int(baud_a) == int(baud_b)
 
 def _connect_one(dev_no: int):
     print("\n" + "=" * 80)
@@ -162,6 +162,14 @@ def _new_ids_for_serial(serial: int) -> tuple[int, int]:
         if "serial" in d and int(d["serial"]) == int(serial):
             return int(d["cmd_id"]), int(d["answer_id"])
     raise KeyError(f"Keine new.ids Zuordnung für SN={serial} gefunden")
+
+
+def _current_canbaud_for(dev_no: int) -> int | None:
+    for d in (DEVICE_CONFIG or []):
+        if int(d.get("dev_no")) == int(dev_no):
+            cb = d.get("canbaud")
+            return int(cb) if cb is not None else None
+    return None
 
 
 def _verify_ids(gsv: GSV86CAN, dev_no: int, serial: int | None, exp_cmd: int, exp_ans: int, exp_canbaud: int):
@@ -297,13 +305,16 @@ def _effective_current_ids_from_results(results: list[dict]) -> list[dict]:
 
         if state == "new":
             cmd_eff, ans_eff = r["cmd_new"], r["ans_new"]
+            baud_eff = r.get("baud_new")
         elif state == "old":
             cmd_eff, ans_eff = r["cmd_old"], r["ans_old"]
+            baud_eff = r.get("baud_old")
         else:
             # unknown: du kannst entweder old drin lassen (aber markieren)
             # oder bewusst new drin lassen, weil das Ziel war.
             # Ich würde: old drin lassen + unknown Flag separat (siehe next step)
             cmd_eff, ans_eff = r["cmd_old"], r["ans_old"]
+            baud_eff = r.get("baud_old")
         
         item = {
             "dev_no": int(r["dev_no"]),
@@ -315,6 +326,11 @@ def _effective_current_ids_from_results(results: list[dict]) -> list[dict]:
         # optional: unknown markieren
         if state == "unknown":
             item["unknown"] = True  # (wenn du das im YAML tolerierst)
+        
+        # WICHTIG: canbaud nur setzen, wenn wir einen Wert haben
+        if baud_eff is not None:
+            item["canbaud"] = int(baud_eff)
+
         out.append(item)
     out.sort(key=lambda d: d["dev_no"])
     return out
@@ -364,7 +380,7 @@ def _merge_current_ids(
     out.sort(key=lambda x: int(x["dev_no"]))
     return out
 
-def _baseline_current_for_case2_without_serial() -> list[dict]:
+def _baseline_current_for_case2_with_baud() -> list[dict]:
     """
     Case 2 (Wizard): current.ids soll ALLE Geräte enthalten, die in new.ids vorkommen:
     - noch nicht bearbeitet: DEFAULT IDs, ohne serial
@@ -376,7 +392,7 @@ def _baseline_current_for_case2_without_serial() -> list[dict]:
             "dev_no": int(d["dev_no"]),
             "cmd_id": int(DEFAULT_CMD_ID),
             "answer_id": int(DEFAULT_ANS_ID),
-            # absichtlich KEIN serial hier
+            "canbaud": int(DEFAULT_CANBAUD),
         })
     baseline.sort(key=lambda x: int(x["dev_no"]))
     return baseline
@@ -542,6 +558,8 @@ def _device_fail(
         "ans_old": ans_old,
         "cmd_new": cmd_new,
         "ans_new": ans_new,
+        "baud_old": baud_old,
+        "baud_new": baud_new,
     })
 
     return f"FEHLER: {err} (state={state}). Bitte Gerät abnehmen."
@@ -552,6 +570,7 @@ def _write_updated_yaml(
     current_default: bool,
     current_ids: list[dict],
     make_new_safe: bool = True,
+    drop_canbaud: bool = False
 ):
     """
     Schreibt eine neue YAML, in der devices.config.current.* auf den Ist-Zustand gesetzt wird.
@@ -581,6 +600,7 @@ def _write_updated_yaml(
             "dev_no": int(d["dev_no"]),
             **({"serial": int(d["serial"])} if "serial" in d and d["serial"] is not None else {}),
             **({"unknown": True} if d.get("unknown") else {}),
+            **({} if drop_canbaud or d.get("canbaud") is None else {"canbaud": int(d["canbaud"])}),
             "cmd_id": _hex_str(int(d["cmd_id"])),
             "answer_id": _hex_str(int(d["answer_id"])),
         }
@@ -699,6 +719,8 @@ def main() -> int:
                             "cmd_old": DEFAULT_CMD_ID,
                             "ans_old": DEFAULT_ANS_ID,
                             "cmd_new": cmd_new,
+                            "baud_old": DEFAULT_CANBAUD,
+                            "baud_new": CANBAUD,
                             "ans_new": ans_new,
                         })
                         already_recorded = True
@@ -722,6 +744,8 @@ def main() -> int:
                                     "ans_old": DEFAULT_ANS_ID,
                                     "cmd_new": DEFAULT_CMD_ID,
                                     "ans_new": DEFAULT_ANS_ID,
+                                    "baud_old": DEFAULT_CANBAUD,
+                                    "baud_new": CANBAUD,
                                 })
                                 already_recorded = True
                                 skip_programming = True
@@ -735,7 +759,7 @@ def main() -> int:
                             
                     if not skip_programming:
                         # --- SKIP: Ziel ist Default und wir sind bereits auf Default aktiv ---
-                        if _same_ids(DEFAULT_CMD_ID, DEFAULT_ANS_ID, cmd_new, ans_new):
+                        if _same_ids(DEFAULT_CMD_ID, DEFAULT_ANS_ID, cmd_new, ans_new, DEFAULT_CANBAUD, CANBAUD):
                             print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs sind DEFAULT. Skip umstellen.")
 
                             results.append({
@@ -747,6 +771,8 @@ def main() -> int:
                                 "ans_old": DEFAULT_ANS_ID,
                                 "cmd_new": cmd_new,
                                 "ans_new": ans_new,
+                                "baud_old": DEFAULT_CANBAUD,
+                                "baud_new": CANBAUD,
                             })
                             already_recorded = True
                             skip_programming = True
@@ -783,6 +809,8 @@ def main() -> int:
                             "ans_old": DEFAULT_ANS_ID,
                             "cmd_new": cmd_new,
                             "ans_new": ans_new,
+                            "baud_old": DEFAULT_CANBAUD,
+                            "baud_new": CANBAUD,
                         })
                         already_recorded = True
                         
@@ -805,7 +833,10 @@ def main() -> int:
                             "ans_old": DEFAULT_ANS_ID,
                             "cmd_new": int(cmd_new) if cmd_new is not None else DEFAULT_CMD_ID,
                             "ans_new": int(ans_new) if ans_new is not None else DEFAULT_ANS_ID,
+                            "baud_old": DEFAULT_CANBAUD,
+                            "baud_new": CANBAUD,
                         })
+                        _warn_unknown(dev_no, sn, where="Abbruch (Ctrl+C)")
                         already_recorded = True
 
                 except Exception as e:
@@ -855,7 +886,7 @@ def main() -> int:
             _print_summary(results)
             updated_subset = _effective_current_ids_from_results(results)
 
-            baseline_current = _baseline_current_for_case2_without_serial()
+            baseline_current = _baseline_current_for_case2_with_baud()
             current_ids = _merge_current_ids(baseline_current, updated_subset)
 
             # current_default bleibt wie gehabt (deine Logik)
@@ -869,6 +900,7 @@ def main() -> int:
                 current_default=current_default,
                 current_ids=current_ids,
                 make_new_safe=all_ok,
+                drop_canbaud = all_ok
             )
             print(f"[INFO] ✅ Updated YAML geschrieben: {dst}")
 
@@ -893,6 +925,8 @@ def main() -> int:
                 cmd_start = int(d["cmd_id"])
                 ans_start = int(d["answer_id"])
 
+                start_baud = _current_canbaud_for(dev_no) or CANBAUD
+
                 cmd_new = int(DEFAULT_CMD_ID)
                 ans_new = int(DEFAULT_ANS_ID)
 
@@ -909,10 +943,11 @@ def main() -> int:
 
                     expected_sn = d.get("serial") if isinstance(d, dict) else None
 
+                    
                     # 1) activate mit current IDs
-                    ok, sn = _try_activate(gsv, dev_no, cmd_start, ans_start, canbaud=CANBAUD, tries=5, delay=0.3, read_sn=True)
+                    ok, sn = _try_activate(gsv, dev_no, cmd_start, ans_start, canbaud=start_baud, tries=5, delay=0.3, read_sn=True)
                     if not ok:
-                        state = _probe_state_after_fail(gsv, dev_no, cmd_start, ans_start, DEFAULT_CMD_ID, DEFAULT_ANS_ID, baud_old=CANBAUD, baud_new=DEFAULT_CANBAUD)
+                        state = _probe_state_after_fail(gsv, dev_no, cmd_start, ans_start, DEFAULT_CMD_ID, DEFAULT_ANS_ID, baud_old=start_baud, baud_new=DEFAULT_CANBAUD)
                         if state == "unknown":
                             _warn_unknown(dev_no, sn, where="state-probe")
 
@@ -925,6 +960,8 @@ def main() -> int:
                             "ans_old": ans_start,
                             "cmd_new": DEFAULT_CMD_ID,
                             "ans_new": DEFAULT_ANS_ID,
+                            "baud_old": start_baud,
+                            "baud_new": DEFAULT_CANBAUD,
                         })
                         already_recorded = True
                         skip_programming = True
@@ -947,6 +984,8 @@ def main() -> int:
                                     "ans_old": ans_start,
                                     "cmd_new": cmd_new,
                                     "ans_new": ans_new,
+                                    "baud_old": start_baud,
+                                    "baud_new": DEFAULT_CANBAUD,
                                 })
                                 already_recorded = True
                                 skip_programming = True
@@ -967,6 +1006,8 @@ def main() -> int:
                                     "ans_old": ans_start,
                                     "cmd_new": cmd_new,
                                     "ans_new": ans_new,
+                                    "baud_old": start_baud,
+                                    "baud_new": DEFAULT_CANBAUD,
                                 })
                                 already_recorded = True
                                 skip_programming = True
@@ -975,7 +1016,7 @@ def main() -> int:
                                 
                     if not skip_programming:
                         # --- SKIP: Gerät ist laut current.ids bereits DEFAULT ---
-                        if _same_ids(cmd_start, ans_start, DEFAULT_CMD_ID, DEFAULT_ANS_ID):
+                        if _same_ids(cmd_start, ans_start, DEFAULT_CMD_ID, DEFAULT_ANS_ID, start_baud, DEFAULT_CANBAUD):
                             print(f"[DEV {dev_no}] current.ids ist bereits DEFAULT und activation OK. Skip reset.")
 
                             results.append({
@@ -987,6 +1028,8 @@ def main() -> int:
                                 "ans_old": ans_start,
                                 "cmd_new": DEFAULT_CMD_ID,
                                 "ans_new": DEFAULT_ANS_ID,
+                                "baud_old": start_baud,
+                                "baud_new": DEFAULT_CANBAUD,
                             })
                             already_recorded = True
                             skip_programming = True
@@ -994,7 +1037,7 @@ def main() -> int:
                             
                     if not skip_programming:
                         # optional: verify start
-                        ok = _verify_ids(gsv, dev_no, sn, cmd_start, ans_start, CANBAUD)
+                        ok = _verify_ids(gsv, dev_no, sn, cmd_start, ans_start, start_baud)
 
                         if not ok:
                             print(f"[{_fmt_dev(dev_no, sn)}] WARN: Start-IDs stimmen nicht (trotz activation).")
@@ -1009,7 +1052,7 @@ def main() -> int:
                             gsv, dev_no,
                             cmd_start, ans_start,
                             cmd_new, ans_new,
-                            baud_old=CANBAUD, baud_new=DEFAULT_CANBAUD
+                            baud_old=start_baud, baud_new=DEFAULT_CANBAUD
                         )
                         if state == "unknown":
                             _warn_unknown(dev_no, sn, where="state-probe")
@@ -1019,6 +1062,7 @@ def main() -> int:
                             "ok": bool(ok2), "state": state,
                             "cmd_old": cmd_start, "ans_old": ans_start,
                             "cmd_new": cmd_new, "ans_new": ans_new,
+                            "baud_old": start_baud, "baud_new": DEFAULT_CANBAUD,
                         })
                         already_recorded = True
 
@@ -1041,7 +1085,10 @@ def main() -> int:
                             "ans_old": ans_start,
                             "cmd_new": DEFAULT_CMD_ID,
                             "ans_new": DEFAULT_ANS_ID,
+                            "baud_old": start_baud,
+                            "baud_new": DEFAULT_CANBAUD,
                         })
+                        _warn_unknown(dev_no, sn, where="Abbruch (Ctrl+C)")
                         already_recorded = True
 
                 except Exception as e:
@@ -1058,7 +1105,7 @@ def main() -> int:
                             ans_old=int(ans_start),
                             cmd_new=int(DEFAULT_CMD_ID),
                             ans_new=int(DEFAULT_ANS_ID),
-                            baud_old=int(CANBAUD),
+                            baud_old=int(start_baud),
                             baud_new=int(DEFAULT_CANBAUD),
                             where="case3/reset-to-default",
                         )
@@ -1099,6 +1146,7 @@ def main() -> int:
                 current_default=current_default,
                 current_ids=current_ids,
                 make_new_safe=all_ok,
+                drop_canbaud = all_ok
             )
             print(f"[INFO] ✅ Updated YAML geschrieben: {dst}")
 
@@ -1127,6 +1175,8 @@ def main() -> int:
                 dev_no = int(d["dev_no"])
                 cmd_id = int(d["cmd_id"])
                 ans_id = int(d["answer_id"])
+
+                start_baud = _current_canbaud_for(dev_no) or CANBAUD
                 
                 sn = None
                 cmd_new = None
@@ -1143,7 +1193,8 @@ def main() -> int:
 
                     expected_sn = d.get("serial") if isinstance(d, dict) else None
 
-                    ok, sn = _try_activate(gsv, dev_no, cmd_id, ans_id, canbaud=CANBAUD, tries=5, delay=0.3, read_sn=True)
+                    
+                    ok, sn = _try_activate(gsv, dev_no, cmd_id, ans_id, canbaud=start_baud, tries=5, delay=0.3, read_sn=True)
                     if not ok:
                         if SN_MODE:
                             # Target unbekannt ohne SN -> keine probe auf new
@@ -1152,7 +1203,7 @@ def main() -> int:
                             cmd_new, ans_new = cmd_id, ans_id  # oder 0/0
                         else:
                             cmd_new, ans_new = _new_ids_for(dev_no)
-                            state = _probe_state_after_fail(gsv, dev_no, cmd_id, ans_id, cmd_new, ans_new)
+                            state = _probe_state_after_fail(gsv, dev_no, cmd_id, ans_id, cmd_new, ans_new, baud_old=start_baud, baud_new=CANBAUD)
                             if state == "unknown":
                                 _warn_unknown(dev_no, sn, where="state-probe")
 
@@ -1165,6 +1216,8 @@ def main() -> int:
                             "ans_old": ans_id,
                             "cmd_new": cmd_new,
                             "ans_new": ans_new,
+                            "baud_old": start_baud,
+                            "baud_new": CANBAUD,
                         })
                         already_recorded = True
                         skip_programming = True
@@ -1188,6 +1241,8 @@ def main() -> int:
                                     "ans_old": ans_id,
                                     "cmd_new": cmd_new,
                                     "ans_new": ans_new,
+                                    "baud_old": start_baud,
+                                    "baud_new": CANBAUD,
                                 })
                                 already_recorded = True
                                 skip_programming = True
@@ -1212,6 +1267,8 @@ def main() -> int:
                                     "ans_old": ans_id,
                                     "cmd_new": cmd_new,
                                     "ans_new": ans_new,
+                                    "baud_old": start_baud,
+                                    "baud_new": CANBAUD,
                                 })
                                 already_recorded = True
                                 skip_programming = True
@@ -1232,6 +1289,8 @@ def main() -> int:
                                     "ans_old": ans_id,
                                     "cmd_new": cmd_new,
                                     "ans_new": ans_new,
+                                    "baud_old": start_baud,
+                                    "baud_new": CANBAUD,
                                 })
                                 already_recorded = True
                                 skip_programming = True
@@ -1241,12 +1300,12 @@ def main() -> int:
                                 
                     if not skip_programming:
                         # Optional: prüfen
-                        ok = _verify_ids(gsv, dev_no, sn, cmd_id, ans_id, CANBAUD)
+                        ok = _verify_ids(gsv, dev_no, sn, cmd_id, ans_id, start_baud)
 
                         if not ok:
                             print(f"[{_fmt_dev(dev_no, sn)}] WARN: Start-IDs stimmen nicht (trotz activation).")
 
-                        if _same_ids(cmd_id, ans_id, cmd_new, ans_new):
+                        if _same_ids(cmd_id, ans_id, cmd_new, ans_new, start_baud, CANBAUD):
                             print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs == aktuelle YAML-IDs. Skip reprogram/reset.")
                             results.append({
                                 "dev_no": dev_no,
@@ -1257,6 +1316,8 @@ def main() -> int:
                                 "ans_old": ans_id,
                                 "cmd_new": cmd_new,
                                 "ans_new": ans_new,
+                                "baud_old": start_baud,
+                                "baud_new": CANBAUD,
                             })
                             already_recorded = True
                             skip_programming = True
@@ -1269,7 +1330,7 @@ def main() -> int:
                         if sn2 is not None:
                             sn = sn2
 
-                        state = "new" if ok2 else _probe_state_after_fail(gsv, dev_no, cmd_id, ans_id, cmd_new, ans_new)
+                        state = "new" if ok2 else _probe_state_after_fail(gsv, dev_no, cmd_id, ans_id, cmd_new, ans_new, baud_old=start_baud, baud_new=CANBAUD)
                         if state == "unknown":
                             _warn_unknown(dev_no, sn, where="state-probe")
 
@@ -1282,6 +1343,8 @@ def main() -> int:
                             "ans_old": ans_id,
                             "cmd_new": cmd_new,
                             "ans_new": ans_new,
+                            "baud_old": start_baud,
+                            "baud_new": CANBAUD,
                         })
                         already_recorded = True
                         print("-" * 80)
@@ -1305,7 +1368,10 @@ def main() -> int:
                             "ans_old": int(ans_id),
                             "cmd_new": int(cmd_new) if cmd_new is not None else int(cmd_id),
                             "ans_new": int(ans_new) if ans_new is not None else int(ans_id),
+                            "baud_old": start_baud,
+                            "baud_new": CANBAUD,
                         })
+                        _warn_unknown(dev_no, sn, where="Abbruch (Ctrl+C)")
                         already_recorded = True
                     
                 except Exception as e:
@@ -1325,7 +1391,7 @@ def main() -> int:
                             ans_old=int(ans_id),
                             cmd_new=int(cmd_new),
                             ans_new=int(ans_new),
-                            baud_old=int(CANBAUD),
+                            baud_old=int(start_baud),
                             baud_new=int(CANBAUD),
                             where="case1/reprogram",
                         )
@@ -1369,6 +1435,7 @@ def main() -> int:
                 current_default=current_default,
                 current_ids=current_ids,
                 make_new_safe=all_ok,
+                drop_canbaud = all_ok
             )
             print(f"[INFO] ✅ Updated YAML geschrieben: {dst}")
             

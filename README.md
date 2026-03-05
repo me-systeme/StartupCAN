@@ -937,15 +937,40 @@ Die Konfiguration besteht aus zwei Listen:
 
 * `devices.config.new` beschreibt den **Soll-Zustand** (auf welche CAN-IDs umgestellt werden soll)
 
-Zusätzlich gibt es Default-IDs (Wizard/Reset):
+Zusätzlich gibt es Default-IDs (Wizard/Reset) und eine Default Baudrate:
 
 ```yaml
 devices:
   config:
     assign:
+      default_canbaud: 1000000
       default_cmd_id: "0x100"
       default_ans_id: "0x101"
 ``` 
+
+Für mehrere Geräte am CAN Bus soll die Baudrate aber auf die Baudrate in `dll.canbaud` umgestellt werden:
+
+```yaml
+dll:
+  # Maximum number of samples the DLL buffer stores per device read cycle.
+  # This value is used to size read_multiple() calls and affects latency/throughput.
+  mybuffersize: 300
+
+  # CAN bus baud rate in bits per second.
+  canbaud: 250000
+```
+
+Zugelassene Baudraten sind: 
+
+* 1000000, 
+* 500000, 
+* 250000, 
+* 125000, 
+* 100000, 
+* 50000, 
+* 25000.
+
+Für mehrere Geräte am CAN Bus wird empfohlen, eine Baudrate von 250000 zu wählen.
 
 ### Allgemeine Regeln
 
@@ -1001,6 +1026,24 @@ Diese Validierungen werden unabhängig vom Case geprüft:
     * Es wird trotzdem versucht, das Gerät umzustellen.
 
     * Es gibt lediglich eine **Warnung** mit dem Hinweis, das Gerät über USB anzuschließen und die CAN ID mit GSVmulti zu suchen. 
+
+* **Baudrate**
+
+    Die Default Baudrate wird in `devices.config.assign.default_canbaud` konfiguriert. 
+    
+    Falls `current.default=true`:
+    
+    * Die Geräte besitzen die Default Baudrate und diese wird zum Aktivieren der Geräte verwendet.
+    
+    Falls `current.default=false`:
+
+    * Die Devices können in `current.ids` mit einem Eintrag `canbaud` konfiguriert werden (optional). 
+    
+    * Wenn Sie keinen Eintrag `canbaud` besitzen, wird als Fallback die Baudrate in `dll.canbaud` verwendet. 
+
+    * Bei `new.default=true` wird die Baudrate wieder auf die Default Baudrate gesetzt.
+
+    * Bei `new.default=false` wird die CAN Baudrate auf die Baudrate in `dll.canbaud` umgestellt.
 
 
      
