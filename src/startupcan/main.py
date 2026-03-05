@@ -13,9 +13,6 @@ Modes:
     4) reset + release + activate again using new IDs
     5) print summary
 
-- DEFAULT_MODE = false:
-  All devices can be connected at once using YAML 'current' IDs.
-  Each device is activated with current IDs and then updated to YAML 'new' IDs.
 """
 
 import sys
@@ -662,6 +659,8 @@ def main() -> int:
 
                 sn = None
                 skip_programming = False
+                already_recorded = False
+                aborted = False
                 disconnect_reason = "Weiter mit nächstem Gerät."
                 cmd_new = None
                 ans_new = None
@@ -702,6 +701,7 @@ def main() -> int:
                             "cmd_new": cmd_new,
                             "ans_new": ans_new,
                         })
+                        already_recorded = True
                         skip_programming = True
                         disconnect_reason = f"Aktivierung (DEFAULT) fehlgeschlagen. State probe={state}. Gerät abnehmen."
                         
@@ -723,6 +723,7 @@ def main() -> int:
                                     "cmd_new": DEFAULT_CMD_ID,
                                     "ans_new": DEFAULT_ANS_ID,
                                 })
+                                already_recorded = True
                                 skip_programming = True
                                 disconnect_reason = "FEHLER: Ziel-IDs konnten nicht bestimmt werden. Dieses Gerät wird übersprungen."
                         else: 
@@ -747,6 +748,7 @@ def main() -> int:
                                 "cmd_new": cmd_new,
                                 "ans_new": ans_new,
                             })
+                            already_recorded = True
                             skip_programming = True
                             disconnect_reason = "OK (skip). Bitte Gerät abnehmen."
                             
@@ -782,11 +784,30 @@ def main() -> int:
                             "cmd_new": cmd_new,
                             "ans_new": ans_new,
                         })
+                        already_recorded = True
                         
                         if ok2:
                             disconnect_reason = "✅ OK: Gerät wurde auf die neuen IDs umgestellt. Bitte abnehmen."
                         else:
                             disconnect_reason = f"FEHLER: Umstellung fehlgeschlagen (state={state}). Bitte abnehmen."
+                except KeyboardInterrupt:
+                    aborted = True
+                    disconnect_reason = "⏭️ Abbruch (Ctrl+C) im Device-Step. Gerät wird freigegeben. Bitte abnehmen."
+                    _safe_release(gsv, dev_no, where="device-step/Ctrl+C")
+
+                    if not already_recorded:
+                        results.append({
+                            "dev_no": dev_no,
+                            "serial": sn,
+                            "ok": False,
+                            "state": "unknown",
+                            "cmd_old": DEFAULT_CMD_ID,
+                            "ans_old": DEFAULT_ANS_ID,
+                            "cmd_new": int(cmd_new) if cmd_new is not None else DEFAULT_CMD_ID,
+                            "ans_new": int(ans_new) if ans_new is not None else DEFAULT_ANS_ID,
+                        })
+                        already_recorded = True
+
                 except Exception as e:
                     # erwartbare Werte in Case 2:
                     # - wir aktivieren am Anfang mit DEFAULT IDs @ DEFAULT_CANBAUD
@@ -796,25 +817,38 @@ def main() -> int:
                     # cmd_new/ans_new müssen dafür definiert sein:
                     if cmd_new is None or ans_new is None:
                         cmd_new, ans_new = DEFAULT_CMD_ID, DEFAULT_ANS_ID
-
-                    disconnect_reason = _device_fail(
-                        gsv=gsv,
-                        results=results,
-                        dev_no=dev_no,
-                        sn=sn,
-                        err=e,
-                        cmd_old=int(DEFAULT_CMD_ID),
-                        ans_old=int(DEFAULT_ANS_ID),
-                        cmd_new=int(cmd_new),
-                        ans_new=int(ans_new),
-                        baud_old=int(DEFAULT_CANBAUD),
-                        baud_new=int(CANBAUD),
-                        where="case2/wizard",
-                    )
+                    if not already_recorded:
+                        disconnect_reason = _device_fail(
+                            gsv=gsv,
+                            results=results,
+                            dev_no=dev_no,
+                            sn=sn,
+                            err=e,
+                            cmd_old=int(DEFAULT_CMD_ID),
+                            ans_old=int(DEFAULT_ANS_ID),
+                            cmd_new=int(cmd_new),
+                            ans_new=int(ans_new),
+                            baud_old=int(DEFAULT_CANBAUD),
+                            baud_new=int(CANBAUD),
+                            where="case2/wizard",
+                        )
+                    else:
+                        disconnect_reason = f"FEHLER nach Ergebnis-Append: {e}. Bitte Gerät abnehmen."
                 finally:
                     
-                    _disconnect_one(gsv, dev_no, sn, reason=disconnect_reason)
+                    try:
+                        _disconnect_one(gsv, dev_no, sn, reason=disconnect_reason)
+                    except KeyboardInterrupt:
+                        # trotzdem versuchen freizugeben, dann sauber hochwerfen
+                        _safe_release(gsv, dev_no, where="finally/KeyboardInterrupt")
+                        raise
+                    except Exception as e:
+                        print(f"[DEV {dev_no}] WARN: disconnect step failed: {e}")
+                        _safe_release(gsv, dev_no, where="finally/disconnect-except")
 
+                if aborted:
+                    # jetzt ganz normal zur "nächstes Gerät?" Frage weitergehen
+                    pass
                 if not _ask_continue("[WIZARD] Nächstes Gerät umstellen? [j/N]: "):
                     break
 
@@ -865,6 +899,8 @@ def main() -> int:
 
                 sn = None
                 skip_programming = False
+                already_recorded = False
+                aborted = False
 
                 disconnect_reason = "Weiter mit nächstem Gerät."
 
@@ -890,6 +926,7 @@ def main() -> int:
                             "cmd_new": DEFAULT_CMD_ID,
                             "ans_new": DEFAULT_ANS_ID,
                         })
+                        already_recorded = True
                         skip_programming = True
                         disconnect_reason = f"Aktivierung (current IDs) fehlgeschlagen. State probe={state}. Gerät abnehmen."
                         
@@ -911,6 +948,7 @@ def main() -> int:
                                     "cmd_new": cmd_new,
                                     "ans_new": ans_new,
                                 })
+                                already_recorded = True
                                 skip_programming = True
                                 disconnect_reason ="Die Seriennummer konnte nicht gelesen werden."
                                 print("-" * 80)
@@ -930,6 +968,7 @@ def main() -> int:
                                     "cmd_new": cmd_new,
                                     "ans_new": ans_new,
                                 })
+                                already_recorded = True
                                 skip_programming = True
                                 disconnect_reason ="Die gelesene Seriennummer stimmt nicht mit der konfigurierten Seriennummer aus dem YAML überein. Die Seriennummer aus dem YAML wird im neuen YAML mit der gelesenen Seriennummer überschrieben."
                                 print("-" * 80)
@@ -949,6 +988,7 @@ def main() -> int:
                                 "cmd_new": DEFAULT_CMD_ID,
                                 "ans_new": DEFAULT_ANS_ID,
                             })
+                            already_recorded = True
                             skip_programming = True
                             disconnect_reason = "OK (skip). Gerät ist bereits DEFAULT. Bitte Gerät abnehmen."
                             
@@ -980,33 +1020,65 @@ def main() -> int:
                             "cmd_old": cmd_start, "ans_old": ans_start,
                             "cmd_new": cmd_new, "ans_new": ans_new,
                         })
+                        already_recorded = True
 
                         if ok2:
                             disconnect_reason = "✅ OK: Gerät ist jetzt DEFAULT. Bitte abnehmen."
                         else:
                             disconnect_reason = f"FEHLER: Reset auf DEFAULT fehlgeschlagen (state={state}). Bitte abnehmen."
+                except KeyboardInterrupt:
+                    aborted = True
+                    disconnect_reason = "⏭️ Abbruch (Ctrl+C) im Device-Step. Gerät wird freigegeben. Bitte abnehmen."
+                    _safe_release(gsv, dev_no, where="device-step/Ctrl+C")
+
+                    if not already_recorded:
+                        results.append({
+                            "dev_no": dev_no,
+                            "serial": sn,
+                            "ok": False,
+                            "state": "unknown",
+                            "cmd_old": cmd_start,
+                            "ans_old": ans_start,
+                            "cmd_new": DEFAULT_CMD_ID,
+                            "ans_new": DEFAULT_ANS_ID,
+                        })
+                        already_recorded = True
 
                 except Exception as e:
                     # old = current IDs @ CANBAUD
                     # new = DEFAULT IDs @ DEFAULT_CANBAUD
-                    disconnect_reason = _device_fail(
-                        gsv=gsv,
-                        results=results,
-                        dev_no=dev_no,
-                        sn=sn,
-                        err=e,
-                        cmd_old=int(cmd_start),
-                        ans_old=int(ans_start),
-                        cmd_new=int(DEFAULT_CMD_ID),
-                        ans_new=int(DEFAULT_ANS_ID),
-                        baud_old=int(CANBAUD),
-                        baud_new=int(DEFAULT_CANBAUD),
-                        where="case3/reset-to-default",
-                    )
+                    if not already_recorded:
+                        disconnect_reason = _device_fail(
+                            gsv=gsv,
+                            results=results,
+                            dev_no=dev_no,
+                            sn=sn,
+                            err=e,
+                            cmd_old=int(cmd_start),
+                            ans_old=int(ans_start),
+                            cmd_new=int(DEFAULT_CMD_ID),
+                            ans_new=int(DEFAULT_ANS_ID),
+                            baud_old=int(CANBAUD),
+                            baud_new=int(DEFAULT_CANBAUD),
+                            where="case3/reset-to-default",
+                        )
+                    else:
+                       disconnect_reason = f"FEHLER nach Ergebnis-Append: {e}. Bitte Gerät abnehmen." 
                     
                 finally:
-                    _disconnect_one(gsv, dev_no, sn, reason=disconnect_reason)
+                    try:
+                        _disconnect_one(gsv, dev_no, sn, reason=disconnect_reason)
+                    except KeyboardInterrupt:
+                        # trotzdem versuchen freizugeben, dann sauber hochwerfen
+                        _safe_release(gsv, dev_no, where="finally/KeyboardInterrupt")
+                        raise
+                    except Exception as e:
+                        print(f"[DEV {dev_no}] WARN: disconnect step failed: {e}")
+                        _safe_release(gsv, dev_no, where="finally/disconnect-except")
 
+                if aborted:
+                    # jetzt ganz normal zur "nächstes Gerät?" Frage weitergehen
+                    pass
                 if not _ask_continue("[WIZARD] Nächstes Gerät auf DEFAULT setzen? [j/N]: "):
                     break
 
@@ -1061,6 +1133,8 @@ def main() -> int:
                 ans_new = None
 
                 skip_programming = False
+                already_recorded = False
+                aborted = False
 
                 disconnect_reason = "Weiter mit nächstem Gerät."
 
@@ -1092,6 +1166,7 @@ def main() -> int:
                             "cmd_new": cmd_new,
                             "ans_new": ans_new,
                         })
+                        already_recorded = True
                         skip_programming = True
                         disconnect_reason = f"Activation failed. State probe={state}. Gerät abnehmen."
                     
@@ -1114,6 +1189,7 @@ def main() -> int:
                                     "cmd_new": cmd_new,
                                     "ans_new": ans_new,
                                 })
+                                already_recorded = True
                                 skip_programming = True
                                 disconnect_reason = "FEHLER: Ziel-IDs konnten nicht bestimmt werden. Dieses Gerät wird übersprungen."
                         else: 
@@ -1137,7 +1213,7 @@ def main() -> int:
                                     "cmd_new": cmd_new,
                                     "ans_new": ans_new,
                                 })
-
+                                already_recorded = True
                                 skip_programming = True
                                 disconnect_reason = "Die Seriennummer konnte nicht gelesen werden."
                                 print("-" * 80)
@@ -1157,6 +1233,7 @@ def main() -> int:
                                     "cmd_new": cmd_new,
                                     "ans_new": ans_new,
                                 })
+                                already_recorded = True
                                 skip_programming = True
                                 disconnect_reason = "Die gelesene Seriennummer stimmt nicht mit der konfigurierten Seriennummer aus dem YAML überein. Die Seriennummer aus dem YAML wird im neuen YAML mit der gelesenen Seriennummer überschrieben."
                                 print("-" * 80)
@@ -1181,6 +1258,7 @@ def main() -> int:
                                 "cmd_new": cmd_new,
                                 "ans_new": ans_new,
                             })
+                            already_recorded = True
                             skip_programming = True
                             disconnect_reason = "OK (skip). Bitte Gerät abnehmen."
                             print("-" * 80)
@@ -1205,36 +1283,69 @@ def main() -> int:
                             "cmd_new": cmd_new,
                             "ans_new": ans_new,
                         })
+                        already_recorded = True
                         print("-" * 80)
 
                         if ok2:
                             disconnect_reason = "✅ OK: Gerät wurde auf die neuen IDs umgestellt. Bitte abnehmen."
                         else:
                             disconnect_reason = f"FEHLER: Reset auf DEFAULT fehlgeschlagen (state={state}). Bitte abnehmen."
+                except KeyboardInterrupt:
+                    aborted = True
+                    disconnect_reason = "⏭️ Abbruch (Ctrl+C) im Device-Step. Gerät wird freigegeben. Bitte abnehmen."
+                    _safe_release(gsv, dev_no, where="device-step/Ctrl+C")
 
+                    if not already_recorded:
+                        results.append({
+                            "dev_no": dev_no,
+                            "serial": sn,
+                            "ok": False,
+                            "state": "unknown",
+                            "cmd_old": int(cmd_id),
+                            "ans_old": int(ans_id),
+                            "cmd_new": int(cmd_new) if cmd_new is not None else int(cmd_id),
+                            "ans_new": int(ans_new) if ans_new is not None else int(ans_id),
+                        })
+                        already_recorded = True
+                    
                 except Exception as e:
                     # old=current IDs @ CANBAUD, new=target IDs @ CANBAUD (keine baud-änderung!)
                     if cmd_new is None or ans_new is None:
                         # wenn Ziel nicht bestimmbar war, nimm current als placeholder
                         cmd_new = int(cmd_id)
                         ans_new = int(ans_id)
-
-                    disconnect_reason = _device_fail(
-                        gsv=gsv,
-                        results=results,
-                        dev_no=dev_no,
-                        sn=sn,
-                        err=e,
-                        cmd_old=int(cmd_id),
-                        ans_old=int(ans_id),
-                        cmd_new=int(cmd_new),
-                        ans_new=int(ans_new),
-                        baud_old=int(CANBAUD),
-                        baud_new=int(CANBAUD),
-                        where="case1/reprogram",
-                    )
+                    if not already_recorded:
+                        disconnect_reason = _device_fail(
+                            gsv=gsv,
+                            results=results,
+                            dev_no=dev_no,
+                            sn=sn,
+                            err=e,
+                            cmd_old=int(cmd_id),
+                            ans_old=int(ans_id),
+                            cmd_new=int(cmd_new),
+                            ans_new=int(ans_new),
+                            baud_old=int(CANBAUD),
+                            baud_new=int(CANBAUD),
+                            where="case1/reprogram",
+                        )
+                    else:
+                        disconnect_reason = f"FEHLER nach Ergebnis-Append: {e}. Bitte Gerät abnehmen."
                 finally:
-                    _disconnect_one(gsv, dev_no, sn, reason=disconnect_reason)
+                    try:
+                        _disconnect_one(gsv, dev_no, sn, reason=disconnect_reason)
+                    except KeyboardInterrupt:
+                        # trotzdem versuchen freizugeben, dann sauber hochwerfen
+                        _safe_release(gsv, dev_no, where="finally/KeyboardInterrupt")
+                        raise
+                    except Exception as e:
+                        print(f"[DEV {dev_no}] WARN: disconnect step failed: {e}")
+                        _safe_release(gsv, dev_no, where="finally/disconnect-except")
+                
+                # nach disconnect_one:
+                if aborted:
+                    # jetzt ganz normal zur "nächstes Gerät?" Frage weitergehen
+                    pass
                 
                 if not _ask_continue("[WIZARD] Nächstes Gerät bearbeiten? [j/N]: "):
                     break
@@ -1270,12 +1381,10 @@ def main() -> int:
             return 0 
 
     finally:
-        try:
-            gsv.release(0)
-        except Exception:
-            pass
-        finally:
-            HANDLE_ACTIVE.clear()  
+        for dev_no, active in list(HANDLE_ACTIVE.items()):
+            if active:
+                _safe_release(gsv, dev_no, where="shutdown")
+        HANDLE_ACTIVE.clear()  
 
 
 if __name__ == "__main__":
