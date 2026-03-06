@@ -103,7 +103,7 @@ def _warn_unknown(dev_no: int, serial: int | None, *, where: str = ""):
         prefix += f" [{where}]"
     print(f"{prefix} ⚠️  {UNKNOWN_HINT}")
 
-def _same_ids(cmd_a: int, ans_a: int, cmd_b: int, ans_b: int, baud_a: int, baud_b: int) -> bool:
+def _same_endpoint(cmd_a: int, ans_a: int, cmd_b: int, ans_b: int, baud_a: int, baud_b: int) -> bool:
     return int(cmd_a) == int(cmd_b) and int(ans_a) == int(ans_b) and int(baud_a) == int(baud_b)
 
 def _connect_one(dev_no: int):
@@ -191,7 +191,7 @@ def _verify_ids(gsv: GSV86CAN, dev_no: int, serial: int | None, exp_cmd: int, ex
         print(f"[{_fmt_dev(dev_no, serial)}] WARN: verify failed: {e}")
         return False
 
-def _set_ids_reset_reactivate_verify_release(
+def _apply_target_and_reconnect(
     gsv: GSV86CAN,
     dev_no: int,
     serial: int | None,
@@ -239,8 +239,10 @@ def _set_ids_reset_reactivate_verify_release(
 
         print(f"[{_fmt_dev(dev_no, serial)}] Re-activation after setting can ids: CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)} CANBAUD={activate_baud}")
         ok, sn2 = _try_activate(gsv, dev_no, cmd_new, ans_new, canbaud=activate_baud, tries=8, delay=0.5, read_sn=True, verbose=False)
-        if not ok:
-            print(f"[{_fmt_dev(dev_no, serial)}] Re-activation with CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)} failed.")
+        if ok: 
+            print(f"[{_fmt_dev(dev_no, serial)}] Re-activation with CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)} CANBAUD={activate_baud} was successfull.")
+        else:
+            print(f"[{_fmt_dev(dev_no, serial)}] Re-activation with CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)} CANBAUD={activate_baud} failed.")
             return False, serial
 
         sn_out = sn2 if sn2 is not None else serial
@@ -309,6 +311,12 @@ def _effective_current_ids_from_results(results: list[dict]) -> list[dict]:
         elif state == "old":
             cmd_eff, ans_eff = r["cmd_old"], r["ans_old"]
             baud_eff = r.get("baud_old")
+        elif state == "old_newbaud":
+            cmd_eff, ans_eff = r["cmd_old"], r["ans_old"]
+            baud_eff = r.get("baud_new")
+        elif state == "new_oldbaud":
+            cmd_eff, ans_eff = r["cmd_new"], r["ans_new"]
+            baud_eff = r.get("baud_old")
         else:
             # unknown: du kannst entweder old drin lassen (aber markieren)
             # oder bewusst new drin lassen, weil das Ziel war.
@@ -366,6 +374,9 @@ def _merge_current_ids(
         # serial nur setzen, wenn geliefert
         if u.get("serial") is not None:
             merged["serial"] = int(u["serial"])
+
+        if "canbaud" in u and u["canbaud"] is not None:
+            merged["canbaud"] = int(u["canbaud"])
 
         # unknown nur wenn erlaubt/geliefert
         if keep_unknown_flags:
@@ -502,10 +513,10 @@ def _probe_state_after_fail(
     if int(baud_old) != int(baud_new):
         if _probe("old@newbaud", cmd_old, ans_old, baud_new):
             print(f"[DEV {dev_no}] Probe success: state=old (baud mismatch case)")
-            return "old"
+            return "old_newbaud"
         if _probe("new@oldbaud", cmd_new, ans_new, baud_old):
             print(f"[DEV {dev_no}] Probe success: state=new (baud mismatch case)")
-            return "new"
+            return "new_oldbaud"
 
     print(f"[DEV {dev_no}] Probes failed (old/new and cross). CAN IDs are unknown.")
     return "unknown"
@@ -759,7 +770,7 @@ def main() -> int:
                             
                     if not skip_programming:
                         # --- SKIP: Ziel ist Default und wir sind bereits auf Default aktiv ---
-                        if _same_ids(DEFAULT_CMD_ID, DEFAULT_ANS_ID, cmd_new, ans_new, DEFAULT_CANBAUD, CANBAUD):
+                        if _same_endpoint(DEFAULT_CMD_ID, DEFAULT_ANS_ID, cmd_new, ans_new, DEFAULT_CANBAUD, CANBAUD):
                             print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs sind DEFAULT. Skip umstellen.")
 
                             results.append({
@@ -785,7 +796,7 @@ def main() -> int:
                         if not ok:
                             print(f"[{_fmt_dev(dev_no, sn)}] WARN: Start-IDs stimmen nicht (trotz activation).")
 
-                        ok2, sn2 = _set_ids_reset_reactivate_verify_release(gsv, dev_no, sn, cmd_new, ans_new, baud_new=CANBAUD)
+                        ok2, sn2 = _apply_target_and_reconnect(gsv, dev_no, sn, cmd_new, ans_new, baud_new=CANBAUD)
 
                         if sn2 is not None:
                             sn = sn2
@@ -1016,14 +1027,14 @@ def main() -> int:
                                 
                     if not skip_programming:
                         # --- SKIP: Gerät ist laut current.ids bereits DEFAULT ---
-                        if _same_ids(cmd_start, ans_start, DEFAULT_CMD_ID, DEFAULT_ANS_ID, start_baud, DEFAULT_CANBAUD):
+                        if _same_endpoint(cmd_start, ans_start, DEFAULT_CMD_ID, DEFAULT_ANS_ID, start_baud, DEFAULT_CANBAUD):
                             print(f"[DEV {dev_no}] current.ids ist bereits DEFAULT und activation OK. Skip reset.")
 
                             results.append({
                                 "dev_no": dev_no,
                                 "serial": sn,
                                 "ok": True,          # skip ist erfolgreich
-                                "state": "new",      # "old" oder "new" je nachdem was es effektiv ist
+                                "state": "old",      # "old" oder "new" je nachdem was es effektiv ist
                                 "cmd_old": cmd_start,
                                 "ans_old": ans_start,
                                 "cmd_new": DEFAULT_CMD_ID,
@@ -1043,7 +1054,7 @@ def main() -> int:
                             print(f"[{_fmt_dev(dev_no, sn)}] WARN: Start-IDs stimmen nicht (trotz activation).")
 
                         # 2-5) set default, reset, release, reactivate default, verify, release
-                        ok2, sn2 = _set_ids_reset_reactivate_verify_release(gsv, dev_no, sn, cmd_new, ans_new, baud_new=DEFAULT_CANBAUD)
+                        ok2, sn2 = _apply_target_and_reconnect(gsv, dev_no, sn, cmd_new, ans_new, baud_new=DEFAULT_CANBAUD)
 
                         if sn2 is not None:
                             sn = sn2
@@ -1305,7 +1316,7 @@ def main() -> int:
                         if not ok:
                             print(f"[{_fmt_dev(dev_no, sn)}] WARN: Start-IDs stimmen nicht (trotz activation).")
 
-                        if _same_ids(cmd_id, ans_id, cmd_new, ans_new, start_baud, CANBAUD):
+                        if _same_endpoint(cmd_id, ans_id, cmd_new, ans_new, start_baud, CANBAUD):
                             print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs == aktuelle YAML-IDs. Skip reprogram/reset.")
                             results.append({
                                 "dev_no": dev_no,
@@ -1325,7 +1336,7 @@ def main() -> int:
                             print("-" * 80)
                             
                     if not skip_programming:
-                        ok2, sn2 = _set_ids_reset_reactivate_verify_release(gsv, dev_no, sn, cmd_new, ans_new)
+                        ok2, sn2 = _apply_target_and_reconnect(gsv, dev_no, sn, cmd_new, ans_new, baud_new=CANBAUD)
                         
                         if sn2 is not None:
                             sn = sn2

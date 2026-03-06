@@ -11,7 +11,7 @@ Vorteile gegenüber GSVmulti:
 
 ```mermaid
 flowchart TD
-  A["Start: Device aus current.ids"] --> B["1. Activate mit current IDs"]
+  A["Start: Device aus current.ids"] --> B["1. Activate mit current IDs and Baudrate"]
 
   B -->|FAIL| P
   B -->|OK| C["2. Serial-Check<br/>wenn serial in current.ids und/oder serial in new.ids"]
@@ -19,21 +19,23 @@ flowchart TD
   C -->|FAIL| F2["Serial passt nicht / nicht lesbar / SN_MODE: Ziel ID konnte nicht bestimmt werden"]
   C -->|OK| D["3. Read CAN Settings<br/>(best-effort)"]
 
-  D -->|OK/ not OK| E["4. Check <br/>Same IDs?"]
+  D -->|OK/ not OK| E["4. Check <br/>Same IDs and Baudrate?"]
   
-  E -->|No| F["5. Set new IDs<br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
+  E -->|No| F["5. Set new IDs and Baudrate<br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
   E -->|Yes| F3["SUCCESS<br/>current.ids = new.ids"]
   
-  F -->|FAIL| P["State-Probe<br/>old / new / unknown"]
+  F -->|FAIL| P["State-Probe<br/>old / new / old_newbaud / new_oldbaud / unknown"]
   F -->|OK| S["SUCCESS<br/>current.ids = new.ids"]
 
-  P -->|old| O["current.ids bleibt alt"]
-  P -->|new| N["current.ids = new IDs"]
-  P -->|unknown| U["current.ids alt + unknown=true"]
+  P -->|old| O["current.ids und Baudrate <br/> bleibt alt"]
+  P -->|new| N["current.ids und Baudrate <br/> sind neu"]
+  P -->|old_newbaud| O2["current.ids bleibt alt, baudrate ist neu"]
+  P -->|new_oldbaud| N2["current.ids ist neu, baudrate bleibt alt"]
+  P -->|unknown| U["current.ids alt + baudrate alt + unknown=true"]
 
 ``` 
 
-In diesem Modus werden (eindeutige) CAN IDs auf neue eindeutige CAN IDs umgestellt. Zur Sicherheit darf immer nur ein Gerät gleichzeitig am Bus sein. Es wird per `dev_no` oder per `serial` gemappt. Jedes Gerät wird nacheinander:
+In diesem Modus werden (eindeutige) CAN IDs auf neue eindeutige CAN IDs umgestellt und die Baudrate wird auf die Baudrate in `dll.baudrate` aus dem YAML gesetzt. Zur Sicherheit darf immer nur ein Gerät gleichzeitig am Bus sein. Es wird per `dev_no` oder per `serial` gemappt. Jedes Gerät wird nacheinander:
 
 * mit den **current IDs** aktiviert,
 
@@ -53,10 +55,10 @@ In diesem Modus werden (eindeutige) CAN IDs auf neue eindeutige CAN IDs umgestel
 
 ```mermaid
 flowchart TD
-    A["1. Activate mit current IDs"]
+    A["1. Activate mit current IDs and Baudrate"]
 ```
 
-* `activate(dev_no, cmd_id, answer_id)`
+* `activate(dev_no, cmd_id, answer_id, canbaud=start_baud)`
 * Seriennummer wird gelesen (`get_serial_no`) und geloggt.
 
 Wenn Schritt 1 fehlschlägt: → siehe Fehlerfall **1**.
@@ -95,41 +97,43 @@ flowchart TD
 A["3. Read CAN Settings<br/>(best-effort)"]
 ``` 
 
-* get_can_settings liest CMD/ANS aus dem Gerät (Index-Konstanten müssen korrekt sein).
+* get_can_settings liest CMD/ANS/Baudrate aus dem Gerät (Index-Konstanten müssen korrekt sein).
 
 * Fehler hier ist **nur eine Warnung** und stoppt den Ablauf nicht.
 
 **Wichtig:** Auch wenn Schritt 3 fehlschlägt, geht es **trotzdem weiter** zu Schritt **4**.
 
 
-***Schritt 4 - Check same IDs**
+***Schritt 4 - Check same IDs and Baudrate**
 
 ```mermaid
 flowchart TD
-A["4. Check <br/>Same IDs?"]
+A["4. Check <br/>Same IDs and Baudrate?"]
 ```
 
-Falls das Gerät bereits die neuen IDs besitzt, wird das Gerät übersprungen. 
+Falls das Gerät bereits die neuen IDs und Baudrate besitzt, wird das Gerät übersprungen. 
 
 Wenn nicht, geht es weiter mit Schritt **5**.
 
 
-**Schritt 5 – Set IDs → Reset → Release → Re-Activate → Verify → Release**
+**Schritt 5 – Set IDs and Baudrate → Reset → Release → Re-Activate → Verify → Release**
 
 ```mermaid
 flowchart TD
-A["5. Set new IDs<br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
+A["5. Set new IDs and Baudrate <br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
 ``` 
 
 * `set_can_settings(CANSET_CAN_IN_CMD_ID, cmd_new)`
 
 * `set_can_settings(CANSET_CAN_OUT_ANS_ID, ans_new)`
 
+* `set_can_settings(CANSET_CAN_BAUD_HZ, int(baud_new))`
+
 * `reset_device()`
 
 * `release()`
 
-* Re-Activate mit `cmd_new/ans_new` (mit Retry-Logik `_try_activate_n`)
+* Re-Activate mit `cmd_new/ans_new` und `baud_new` (mit Retry-Logik `_try_activate_n`)
 
 * Verify über `get_can_settings` (Best-Effort)
 
@@ -137,7 +141,7 @@ A["5. Set new IDs<br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
 
 Wenn Schritt 5 erfolgreich ist → Device gilt als **OK / umgestellt**.
 
-Wenn Schritt 5 fehlschlägt → es wird eine **Zustandsprobe** durchgeführt (old/new/unknown) und entsprechend in `config.updated.yaml` eingetragen (siehe Fehlerfall **4**).
+Wenn Schritt 5 fehlschlägt → es wird eine **Zustandsprobe** durchgeführt (old/new/old_newbaud/new_oldbaud/unknown) und entsprechend in `config.updated.yaml` eingetragen (siehe Fehlerfall **4**).
 
 
 
@@ -147,7 +151,7 @@ Wenn Schritt 5 fehlschlägt → es wird eine **Zustandsprobe** durchgeführt (ol
 
 ```mermaid
 flowchart TD
-A["State-Probe<br/>old / new / unknown"]
+A["State-Probe<br/>old / new / old_newbaud / new_oldbaud / unknown"]
 ```
 
 **Symptom:** activate funktioniert nicht (Timeout/249/…); keine aktive Session.
@@ -158,21 +162,29 @@ A["State-Probe<br/>old / new / unknown"]
 
 * Danach wird “Best-Effort” geprüft, welche IDs tatsächlich aktiv sind:
 
-    * **state = "old"** → Gerät besitzt sehr wahrscheinlich die konfigurierten IDs in `current.ids`. Das erste activate hat nicht geklappt. Jetzt klappt es aber. 
+    * **state = "old"** → Gerät besitzt sehr wahrscheinlich die konfigurierten IDs und Baudrate in `current.ids` . Das erste activate hat nicht geklappt. Jetzt klappt es aber. 
 
-    * **state = "new"** → Gerät ist sehr wahrscheinlich bereits auf neuen IDs
+    * **state = "new"** → Gerät ist sehr wahrscheinlich bereits auf neuen IDs und neuer Baudrate.
 
-    * **state = "unknown"** → weder old noch new konnte aktiviert werden
+    * **state = "old_newbaud"** → Gerät hat alte IDs und die neue Baudrate (`dll.baudrate`).
+
+    * **state = "new_oldbaud"** → Gerät hat neue IDs und die alte Baudrate aus `current.ids`.
+
+    * **state = "unknown"** → weder old noch new noch Mischzustände konnten aktiviert werden
 
 * Gerät muss zur Sicherheit vom Bus genommen werden.
 
 **YAML-Update** (`config.updated.yaml`) **abhängig vom state**:
 
-* **state="old"** → `current.ids` bleibt auf alten IDs
+* **state="old"** → `current.ids` bleibt auf alten IDs und Baudrate
 
-* **state="new"** → `current.ids` wird auf neue IDs gesetzt
+* **state="new"** → `current.ids` wird auf neue IDs und Baudrate gesetzt
 
-* **state="unknown"** → `current.ids` bleibt auf alten IDs **und** `unknown: true` wird gesetzt (als Warnflag)
+* **state = "old_newbaud"** → Gerät hat alte IDs und die neue Baudrate (`dll.baudrate`).
+
+* **state = "new_oldbaud"** → Gerät hat neue IDs und die alte Baudrate aus `current.ids`.
+
+* **state="unknown"** → `current.ids` bleibt auf alten IDs und alter Baudrate **und** `unknown: true` wird gesetzt (als Warnflag)
 
 * `new.ids` bleibt unverändert (Ziel bleibt bestehen)
 
@@ -261,7 +273,7 @@ A["Warnung"]
 
 ```mermaid
 flowchart TD
-E["Check = Same IDs"]
+E["Check = Same IDs and Baudrate"]
 ```
 
 Das ist genau genommen kein Fehler. Das Device wird lediglich übersprungen.
@@ -276,7 +288,7 @@ Das ist genau genommen kein Fehler. Das Device wird lediglich übersprungen.
 
 **YAML-Update:**
 
-* SUCCESS: in `current.ids` werden neue ids geschrieben (state=new). 
+* SUCCESS: in `current.ids` werden neue ids und neue Baudrate geschrieben (state=new). 
 
 
 
@@ -284,7 +296,7 @@ Das ist genau genommen kein Fehler. Das Device wird lediglich übersprungen.
 
 ```mermaid
 flowchart TD
-A["State-Probe<br/>old / new / unknown"]
+A["State-Probe<br/>old / new / old_newbaud / new_oldbaud / unknown"]
 ```
 
 **Aktion:**
@@ -293,21 +305,29 @@ A["State-Probe<br/>old / new / unknown"]
 
 * Danach wird “Best-Effort” geprüft, welche IDs tatsächlich aktiv sind:
 
-    * **state = "old"** → Gerät ist sehr wahrscheinlich auf den alten IDs geblieben
+    * **state = "old"** → Gerät besitzt sehr wahrscheinlich die konfigurierten IDs und Baudrate in `current.ids`. Das erste activate hat nicht geklappt. Jetzt klappt es aber. 
 
-    * **state = "new"** → Gerät ist sehr wahrscheinlich bereits auf neuen IDs
+    * **state = "new"** → Gerät ist sehr wahrscheinlich bereits auf neuen IDs und neuer Baudrate.
 
-    * **state = "unknown"** → weder old noch new konnte aktiviert werden
+    * **state = "old_newbaud"** → Gerät hat alte IDs und die neue Baudrate (`dll.baudrate`).
+
+    * **state = "new_oldbaud"** → Gerät hat neue IDs und die alte Baudrate aus `current.ids`.
+
+    * **state = "unknown"** → weder old noch new noch Mischzustände konnten aktiviert werden
 
 * Gerät muss vom Bus genommenn werden. 
 
 **YAML-Update** (`config.updated.yaml`) **abhängig vom state**:
 
-* **state="old"** → `current.ids` bleibt auf alten IDs
+* **state="old"** → `current.ids` bleibt auf alten IDs und Baudrate
 
-* **state="new"** → `current.ids` wird auf neue IDs gesetzt
+* **state="new"** → `current.ids` wird auf neue IDs und Baudrate gesetzt
 
-* **state="unknown"** → `current.ids` bleibt auf alten IDs **und** `unknown: true` wird gesetzt (als Warnflag)
+* **state = "old_newbaud"** → Gerät hat alte IDs und die neue Baudrate (`dll.baudrate`).
+
+* **state = "new_oldbaud"** → Gerät hat neue IDs und die alte Baudrate aus `current.ids`.
+
+* **state="unknown"** → `current.ids` bleibt auf alten IDs und alter Baudrate **und** `unknown: true` wird gesetzt (als Warnflag)
 
 * `new.ids` bleibt unverändert (Ziel bleibt bestehen)
 
@@ -320,7 +340,7 @@ A["SUCCESS<br/>current.ids = new IDs"]
 
 Wenn ein Gerät erfolgreich umgestellt wurde (`ok=True`):
 
-* `config.updated.yaml` schreibt für dieses Gerät in `current.ids` die **neuen IDs** (und ggf. die Seriennummer).
+* `config.updated.yaml` schreibt für dieses Gerät in `current.ids` die **neuen IDs** (und ggf. die Seriennummer und Baudrate).
 
 Wenn **alle** Geräte erfolgreich umgestellt wurden:
 
@@ -328,12 +348,14 @@ Wenn **alle** Geräte erfolgreich umgestellt wurden:
 
 * Dadurch ist ein erneuter Run “safe” und versucht nicht erneut umzustellen.
 
+* Baudrate kommt nicht mehr in `current.ids` vor. Die richtige Baudrate steht in `dll.canbaud`.
+
 
 ## Case 2 – Default mode (`current.default=true`, `new.default=false`)
 
 ```mermaid
 flowchart TD
-  B["1. Activate mit Default IDs"]
+  B["1. Activate mit Default IDs und Default Baudrate"]
 
   B -->|FAIL| P
   B -->|OK| D["2. SN_MODE: Get Target IDs"]
@@ -341,17 +363,19 @@ flowchart TD
   D -->|FAIL| F2[" SN_MODE: Ziel ID konnte per serial nicht bestimmt werden"]
   D -->|OK| E["3. Read CAN Settings<br/>(best-effort)"]
 
-  E -->|OK/ not OK| F["4. Check <br/>Same IDs?"]
+  E -->|OK/ not OK| F["4. Check <br/>Same IDs and Baudrate?"]
   
-  F -->|No| G["5. Set new IDs<br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
+  F -->|No| G["5. Set new IDs and Baudrate <br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
   F -->|Yes| F3["SUCCESS<br/>current.ids = new.ids"]
   
-  G -->|FAIL| P["State-Probe<br/>old / new / unknown"]
+  G -->|FAIL| P["State-Probe<br/>old / new / old_neubaud / new_oldbaud / unknown"]
   G -->|OK| S["SUCCESS<br/>current.ids = new.ids"]
 
-  P -->|old| O["current.ids bleibt alt"]
-  P -->|new| N["current.ids = new IDs"]
-  P -->|unknown| U["current.ids alt + unknown=true"]
+  P -->|old| O["current.ids und Baudrate <br/> bleibt alt"]
+  P -->|new| N["current.ids und Baudrate <br/> sind neu"]
+  P -->|old_newbaud| O2["current.ids bleibt alt, baudrate ist neu"]
+  P -->|new_oldbaud| N2["current.ids ist neu, baudrate bleibt alt"]
+  P -->|unknown| U["current.ids alt + baudrate alt + unknown=true"]
 
 ``` 
 
