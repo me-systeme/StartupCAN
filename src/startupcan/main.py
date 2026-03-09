@@ -521,6 +521,112 @@ def _probe_state_after_fail(
     print(f"[DEV {dev_no}] Probes failed (old/new and cross). CAN IDs are unknown.")
     return "unknown"
 
+
+def _activate_or_record_failure(
+    *,
+    gsv: GSV86CAN,
+    results: list[dict],
+    dev_no: int,
+    cmd_old: int,
+    ans_old: int,
+    baud_old: int,
+    cmd_new: int | None,
+    ans_new: int | None,
+    baud_new: int,
+    tries: int = 5,
+    delay: float = 0.3,
+    read_sn: bool = True,
+    sn_mode_requires_known_target: bool = False,
+    warn_where: str = "state-probe",
+    fail_message: str = "Activation failed.",
+) -> tuple[bool, int | None, bool, bool, str, int, int]:
+    """
+    Führt initiales activate() aus.
+    Wenn activate fehlschlägt:
+      - state probe / unknown handling
+      - results append
+      - skip_programming=True
+    Wenn activate erfolgreich:
+      - nur ok/sn zurück, keine Ergebniszeile
+
+    Returns:
+        ok,
+        sn,
+        already_recorded,
+        skip_programming,
+        disconnect_reason,
+        cmd_new_out,
+        ans_new_out
+    """
+    ok, sn = _try_activate(
+        gsv,
+        dev_no,
+        cmd_old,
+        ans_old,
+        canbaud=baud_old,
+        tries=tries,
+        delay=delay,
+        read_sn=read_sn,
+    )
+
+    if ok:
+        return (
+            True,
+            sn,
+            False,   # already_recorded
+            False,   # skip_programming
+            "",
+            int(cmd_new) if cmd_new is not None else int(cmd_old),
+            int(ans_new) if ans_new is not None else int(ans_old),
+        )
+
+    # activate fehlgeschlagen
+    if sn_mode_requires_known_target or cmd_new is None or ans_new is None:
+        state = "unknown"
+        _warn_unknown(dev_no, sn, where=warn_where)
+        cmd_new_out = int(cmd_old)
+        ans_new_out = int(ans_old)
+    else:
+        cmd_new_out = int(cmd_new)
+        ans_new_out = int(ans_new)
+
+        state = _probe_state_after_fail(
+            gsv,
+            dev_no,
+            int(cmd_old),
+            int(ans_old),
+            cmd_new_out,
+            ans_new_out,
+            baud_old=int(baud_old),
+            baud_new=int(baud_new),
+        )
+        if state == "unknown":
+            _warn_unknown(dev_no, sn, where="state-probe")
+
+    results.append({
+        "dev_no": int(dev_no),
+        "serial": sn,
+        "ok": False,
+        "state": state,
+        "cmd_old": int(cmd_old),
+        "ans_old": int(ans_old),
+        "cmd_new": int(cmd_new_out),
+        "ans_new": int(ans_new_out),
+        "baud_old": int(baud_old),
+        "baud_new": int(baud_new),
+    })
+
+    return (
+        False,
+        sn,
+        True,   # already_recorded
+        True,   # skip_programming
+        f"{fail_message} State probe={state}. Gerät abnehmen.",
+        cmd_new_out,
+        ans_new_out,
+    )
+
+
 def _device_fail(
     *,
     gsv: GSV86CAN,
@@ -695,6 +801,7 @@ def main() -> int:
                 disconnect_reason = "Weiter mit nächstem Gerät."
                 cmd_new = None
                 ans_new = None
+                needs_sn_but_missing = False
 
                 try: 
                     # if dev_no == 1:
@@ -707,36 +814,61 @@ def main() -> int:
 
                     _connect_one(dev_no)
 
-                    ok, sn = _try_activate(gsv, dev_no, DEFAULT_CMD_ID, DEFAULT_ANS_ID, canbaud=DEFAULT_CANBAUD, tries=5, delay=0.3, read_sn=True)
+                    if SN_MODE:
+                        needs_sn_but_missing = True
+                    else:
+                        cmd_new, ans_new = _new_ids_for(dev_no)
 
-                    if not ok:
-                        if SN_MODE:
-                            # target IDs sind ohne SN nicht bestimmbar → keine sinnvolle "already new" Probe
-                            state = "unknown"
-                            _warn_unknown(dev_no, sn, where="activation")
-                            cmd_new = DEFAULT_CMD_ID
-                            ans_new = DEFAULT_ANS_ID
-                        else:
-                            cmd_new, ans_new = _new_ids_for(dev_no)   # target schon jetzt bekannt
-                            state = _probe_state_after_fail(gsv, dev_no, DEFAULT_CMD_ID, DEFAULT_ANS_ID, cmd_new, ans_new, baud_old=DEFAULT_CANBAUD, baud_new=CANBAUD)
-                            if state == "unknown":
-                                _warn_unknown(dev_no, sn, where="state-probe")
+                    ok, sn, already_recorded, skip_programming, disconnect_reason, cmd_new, ans_new = _activate_or_record_failure(
+                        gsv=gsv,
+                        results=results,
+                        dev_no=dev_no,
+                        cmd_old=DEFAULT_CMD_ID,
+                        ans_old=DEFAULT_ANS_ID,
+                        baud_old=DEFAULT_CANBAUD,
+                        cmd_new=cmd_new,
+                        ans_new=ans_new,
+                        baud_new=CANBAUD,
+                        tries=5,
+                        delay=0.3,
+                        read_sn=True,
+                        sn_mode_requires_known_target=needs_sn_but_missing,
+                        warn_where="activation",
+                        fail_message="Aktivierung (DEFAULT) fehlgeschlagen.",
+                    )
 
-                        results.append({
-                            "dev_no": dev_no,
-                            "serial": sn,
-                            "ok": False,
-                            "state": state,
-                            "cmd_old": DEFAULT_CMD_ID,
-                            "ans_old": DEFAULT_ANS_ID,
-                            "cmd_new": cmd_new,
-                            "baud_old": DEFAULT_CANBAUD,
-                            "baud_new": CANBAUD,
-                            "ans_new": ans_new,
-                        })
-                        already_recorded = True
-                        skip_programming = True
-                        disconnect_reason = f"Aktivierung (DEFAULT) fehlgeschlagen. State probe={state}. Gerät abnehmen."
+
+
+                    # ok, sn = _try_activate(gsv, dev_no, DEFAULT_CMD_ID, DEFAULT_ANS_ID, canbaud=DEFAULT_CANBAUD, tries=5, delay=0.3, read_sn=True)
+
+                    # if not ok:
+                    #     if SN_MODE:
+                    #         # target IDs sind ohne SN nicht bestimmbar → keine sinnvolle "already new" Probe
+                    #         state = "unknown"
+                    #         _warn_unknown(dev_no, sn, where="activation")
+                    #         cmd_new = DEFAULT_CMD_ID
+                    #         ans_new = DEFAULT_ANS_ID
+                    #     else:
+                    #         cmd_new, ans_new = _new_ids_for(dev_no)   # target schon jetzt bekannt
+                    #         state = _probe_state_after_fail(gsv, dev_no, DEFAULT_CMD_ID, DEFAULT_ANS_ID, cmd_new, ans_new, baud_old=DEFAULT_CANBAUD, baud_new=CANBAUD)
+                    #         if state == "unknown":
+                    #             _warn_unknown(dev_no, sn, where="state-probe")
+
+                    #     results.append({
+                    #         "dev_no": dev_no,
+                    #         "serial": sn,
+                    #         "ok": False,
+                    #         "state": state,
+                    #         "cmd_old": DEFAULT_CMD_ID,
+                    #         "ans_old": DEFAULT_ANS_ID,
+                    #         "cmd_new": cmd_new,
+                    #         "baud_old": DEFAULT_CANBAUD,
+                    #         "baud_new": CANBAUD,
+                    #         "ans_new": ans_new,
+                    #     })
+                    #     already_recorded = True
+                    #     skip_programming = True
+                    #     disconnect_reason = f"Aktivierung (DEFAULT) fehlgeschlagen. State probe={state}. Gerät abnehmen."
                         
                     if not skip_programming:
                         if SN_MODE:
@@ -955,28 +1087,46 @@ def main() -> int:
                     expected_sn = d.get("serial") if isinstance(d, dict) else None
 
                     
-                    # 1) activate mit current IDs
-                    ok, sn = _try_activate(gsv, dev_no, cmd_start, ans_start, canbaud=start_baud, tries=5, delay=0.3, read_sn=True)
-                    if not ok:
-                        state = _probe_state_after_fail(gsv, dev_no, cmd_start, ans_start, DEFAULT_CMD_ID, DEFAULT_ANS_ID, baud_old=start_baud, baud_new=DEFAULT_CANBAUD)
-                        if state == "unknown":
-                            _warn_unknown(dev_no, sn, where="state-probe")
+                    ok, sn, already_recorded, skip_programming, disconnect_reason, cmd_new, ans_new = _activate_or_record_failure(
+                        gsv=gsv,
+                        results=results,
+                        dev_no=dev_no,
+                        cmd_old=cmd_start,
+                        ans_old=ans_start,
+                        baud_old=start_baud,
+                        cmd_new=cmd_new,
+                        ans_new=ans_new,
+                        baud_new=DEFAULT_CANBAUD,
+                        tries=5,
+                        delay=0.3,
+                        read_sn=True,
+                        sn_mode_requires_known_target=False,
+                        warn_where="state-probe",
+                        fail_message="Aktivierung (current IDs) fehlgeschlagen.",
+                    )
 
-                        results.append({
-                            "dev_no": dev_no,
-                            "serial": sn,
-                            "ok": False,
-                            "state": state,
-                            "cmd_old": cmd_start,
-                            "ans_old": ans_start,
-                            "cmd_new": DEFAULT_CMD_ID,
-                            "ans_new": DEFAULT_ANS_ID,
-                            "baud_old": start_baud,
-                            "baud_new": DEFAULT_CANBAUD,
-                        })
-                        already_recorded = True
-                        skip_programming = True
-                        disconnect_reason = f"Aktivierung (current IDs) fehlgeschlagen. State probe={state}. Gerät abnehmen."
+                    # # 1) activate mit current IDs
+                    # ok, sn = _try_activate(gsv, dev_no, cmd_start, ans_start, canbaud=start_baud, tries=5, delay=0.3, read_sn=True)
+                    # if not ok:
+                    #     state = _probe_state_after_fail(gsv, dev_no, cmd_start, ans_start, DEFAULT_CMD_ID, DEFAULT_ANS_ID, baud_old=start_baud, baud_new=DEFAULT_CANBAUD)
+                    #     if state == "unknown":
+                    #         _warn_unknown(dev_no, sn, where="state-probe")
+
+                    #     results.append({
+                    #         "dev_no": dev_no,
+                    #         "serial": sn,
+                    #         "ok": False,
+                    #         "state": state,
+                    #         "cmd_old": cmd_start,
+                    #         "ans_old": ans_start,
+                    #         "cmd_new": DEFAULT_CMD_ID,
+                    #         "ans_new": DEFAULT_ANS_ID,
+                    #         "baud_old": start_baud,
+                    #         "baud_new": DEFAULT_CANBAUD,
+                    #     })
+                    #     already_recorded = True
+                    #     skip_programming = True
+                    #     disconnect_reason = f"Aktivierung (current IDs) fehlgeschlagen. State probe={state}. Gerät abnehmen."
                         
                     
                     # Wenn current.ids serial angibt: muss matchen (und muss lesbar sein)
@@ -1192,6 +1342,7 @@ def main() -> int:
                 sn = None
                 cmd_new = None
                 ans_new = None
+                needs_sn_but_missing = False
 
                 skip_programming = False
                 already_recorded = False
@@ -1204,35 +1355,59 @@ def main() -> int:
 
                     expected_sn = d.get("serial") if isinstance(d, dict) else None
 
+                    if SN_MODE:
+                        # Ziel kann erst bestimmt werden, wenn SN gelesen wurde
+                        needs_sn_but_missing = True
+                    else:
+                        cmd_new, ans_new = _new_ids_for(dev_no)
                     
-                    ok, sn = _try_activate(gsv, dev_no, cmd_id, ans_id, canbaud=start_baud, tries=5, delay=0.3, read_sn=True)
-                    if not ok:
-                        if SN_MODE:
-                            # Target unbekannt ohne SN -> keine probe auf new
-                            state = "unknown"
-                            _warn_unknown(dev_no, sn, where="state-probe")
-                            cmd_new, ans_new = cmd_id, ans_id  # oder 0/0
-                        else:
-                            cmd_new, ans_new = _new_ids_for(dev_no)
-                            state = _probe_state_after_fail(gsv, dev_no, cmd_id, ans_id, cmd_new, ans_new, baud_old=start_baud, baud_new=CANBAUD)
-                            if state == "unknown":
-                                _warn_unknown(dev_no, sn, where="state-probe")
+                    ok, sn, already_recorded, skip_programming, disconnect_reason, cmd_new, ans_new = _activate_or_record_failure(
+                        gsv=gsv,
+                        results=results,
+                        dev_no=dev_no,
+                        cmd_old=cmd_id,
+                        ans_old=ans_id,
+                        baud_old=start_baud,
+                        cmd_new=cmd_new,
+                        ans_new=ans_new,
+                        baud_new=CANBAUD,
+                        tries=5,
+                        delay=0.3,
+                        read_sn=True,
+                        sn_mode_requires_known_target=needs_sn_but_missing,
+                        warn_where="state-probe",
+                        fail_message="Activation failed.",
+                    )
 
-                        results.append({
-                            "dev_no": dev_no,
-                            "serial": sn,
-                            "ok": False,
-                            "state": state,
-                            "cmd_old": cmd_id,
-                            "ans_old": ans_id,
-                            "cmd_new": cmd_new,
-                            "ans_new": ans_new,
-                            "baud_old": start_baud,
-                            "baud_new": CANBAUD,
-                        })
-                        already_recorded = True
-                        skip_programming = True
-                        disconnect_reason = f"Activation failed. State probe={state}. Gerät abnehmen."
+                    
+                    # ok, sn = _try_activate(gsv, dev_no, cmd_id, ans_id, canbaud=start_baud, tries=5, delay=0.3, read_sn=True)
+                    # if not ok:
+                    #     if SN_MODE:
+                    #         # Target unbekannt ohne SN -> keine probe auf new
+                    #         state = "unknown"
+                    #         _warn_unknown(dev_no, sn, where="state-probe")
+                    #         cmd_new, ans_new = cmd_id, ans_id  # oder 0/0
+                    #     else:
+                    #         cmd_new, ans_new = _new_ids_for(dev_no)
+                    #         state = _probe_state_after_fail(gsv, dev_no, cmd_id, ans_id, cmd_new, ans_new, baud_old=start_baud, baud_new=CANBAUD)
+                    #         if state == "unknown":
+                    #             _warn_unknown(dev_no, sn, where="state-probe")
+
+                    #     results.append({
+                    #         "dev_no": dev_no,
+                    #         "serial": sn,
+                    #         "ok": False,
+                    #         "state": state,
+                    #         "cmd_old": cmd_id,
+                    #         "ans_old": ans_id,
+                    #         "cmd_new": cmd_new,
+                    #         "ans_new": ans_new,
+                    #         "baud_old": start_baud,
+                    #         "baud_new": CANBAUD,
+                    #     })
+                    #     already_recorded = True
+                    #     skip_programming = True
+                    #     disconnect_reason = f"Activation failed. State probe={state}. Gerät abnehmen."
                     
                     if not skip_programming:
                         if SN_MODE:
