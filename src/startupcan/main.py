@@ -770,6 +770,49 @@ def _validate_expected_serial(
 
     return False, False, ""
 
+def _handle_skip_if_same_endpoint(
+    *,
+    results: list[dict],
+    dev_no: int,
+    sn: int | None,
+    cmd_old: int,
+    ans_old: int,
+    baud_old: int,
+    cmd_new: int,
+    ans_new: int,
+    baud_new: int,
+    state_on_skip: str = "old",
+    print_message: str = "Ziel-IDs entsprechen bereits dem aktuellen Zustand. Skip umstellen.",
+    disconnect_message: str = "OK (skip). Bitte Gerät abnehmen.",
+) -> tuple[bool, bool, str]:
+    """
+    Wenn alter und neuer Endpoint identisch sind, wird der Schritt als erfolgreich
+    übersprungen und direkt in results eingetragen.
+
+    Returns:
+        already_recorded,
+        skip_programming,
+        disconnect_reason
+    """
+    if not _same_endpoint(cmd_old, ans_old, cmd_new, ans_new, baud_old, baud_new):
+        return False, False, ""
+
+    print(f"[{_fmt_dev(dev_no, sn)}] {print_message}")
+
+    results.append({
+        "dev_no": int(dev_no),
+        "serial": sn,
+        "ok": True,
+        "state": state_on_skip,
+        "cmd_old": int(cmd_old),
+        "ans_old": int(ans_old),
+        "cmd_new": int(cmd_new),
+        "ans_new": int(ans_new),
+        "baud_old": int(baud_old),
+        "baud_new": int(baud_new),
+    })
+
+    return True, True, disconnect_message
 
 def _device_fail(
     *,
@@ -998,36 +1041,32 @@ def main() -> int:
                             fail_message="FEHLER: Ziel-IDs konnten nicht bestimmt werden. Dieses Gerät wird übersprungen.",
                         )
 
-                
-                            
-                    if not skip_programming:
-                        # --- SKIP: Ziel ist Default und wir sind bereits auf Default aktiv ---
-                        if _same_endpoint(DEFAULT_CMD_ID, DEFAULT_ANS_ID, cmd_new, ans_new, DEFAULT_CANBAUD, CANBAUD):
-                            print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs sind DEFAULT. Skip umstellen.")
-
-                            results.append({
-                                "dev_no": dev_no,
-                                "serial": sn,
-                                "ok": True,          # skip ist erfolgreich
-                                "state": "old",      
-                                "cmd_old": DEFAULT_CMD_ID,
-                                "ans_old": DEFAULT_ANS_ID,
-                                "cmd_new": cmd_new,
-                                "ans_new": ans_new,
-                                "baud_old": DEFAULT_CANBAUD,
-                                "baud_new": CANBAUD,
-                            })
-                            already_recorded = True
-                            skip_programming = True
-                            disconnect_reason = "OK (skip). Bitte Gerät abnehmen."
-                            
                     if not skip_programming:
                         # optional: verify start
                         ok = _verify_ids(gsv, dev_no, sn, DEFAULT_CMD_ID, DEFAULT_ANS_ID, DEFAULT_CANBAUD)
 
                         if not ok:
                             print(f"[{_fmt_dev(dev_no, sn)}] WARN: Start-IDs stimmen nicht (trotz activation).")
+                            
+                    if not skip_programming:
+                        already_recorded, skip_programming, disconnect_reason = _handle_skip_if_same_endpoint(
+                            results=results,
+                            dev_no=dev_no,
+                            sn=sn,
+                            cmd_old=DEFAULT_CMD_ID,
+                            ans_old=DEFAULT_ANS_ID,
+                            baud_old=DEFAULT_CANBAUD,
+                            cmd_new=cmd_new,
+                            ans_new=ans_new,
+                            baud_new=CANBAUD,
+                            state_on_skip="old",
+                            print_message="Ziel-IDs sind DEFAULT. Skip umstellen.",
+                            disconnect_message="OK (skip). Bitte Gerät abnehmen.",
+                        )
 
+                            
+                    
+                    if not skip_programming:
                         ok2, sn2 = _apply_target_and_reconnect(gsv, dev_no, sn, cmd_new, ans_new, baud_new=CANBAUD)
 
                         if sn2 is not None:
@@ -1220,35 +1259,32 @@ def main() -> int:
                             baud_new=DEFAULT_CANBAUD,
                         )
    
-                                
-                    if not skip_programming:
-                        # --- SKIP: Gerät ist laut current.ids bereits DEFAULT ---
-                        if _same_endpoint(cmd_start, ans_start, DEFAULT_CMD_ID, DEFAULT_ANS_ID, start_baud, DEFAULT_CANBAUD):
-                            print(f"[DEV {dev_no}] current.ids ist bereits DEFAULT und activation OK. Skip reset.")
-
-                            results.append({
-                                "dev_no": dev_no,
-                                "serial": sn,
-                                "ok": True,          # skip ist erfolgreich
-                                "state": "old",      # "old" oder "new" je nachdem was es effektiv ist
-                                "cmd_old": cmd_start,
-                                "ans_old": ans_start,
-                                "cmd_new": DEFAULT_CMD_ID,
-                                "ans_new": DEFAULT_ANS_ID,
-                                "baud_old": start_baud,
-                                "baud_new": DEFAULT_CANBAUD,
-                            })
-                            already_recorded = True
-                            skip_programming = True
-                            disconnect_reason = "OK (skip). Gerät ist bereits DEFAULT. Bitte Gerät abnehmen."
-                            
                     if not skip_programming:
                         # optional: verify start
                         ok = _verify_ids(gsv, dev_no, sn, cmd_start, ans_start, start_baud)
 
                         if not ok:
                             print(f"[{_fmt_dev(dev_no, sn)}] WARN: Start-IDs stimmen nicht (trotz activation).")
+                    
 
+                    if not skip_programming:
+                        already_recorded, skip_programming, disconnect_reason = _handle_skip_if_same_endpoint(
+                            results=results,
+                            dev_no=dev_no,
+                            sn=sn,
+                            cmd_old=cmd_start,
+                            ans_old=ans_start,
+                            baud_old=start_baud,
+                            cmd_new=DEFAULT_CMD_ID,
+                            ans_new=DEFAULT_ANS_ID,
+                            baud_new=DEFAULT_CANBAUD,
+                            state_on_skip="old",
+                            print_message="current.ids ist bereits DEFAULT und activation OK. Skip reset.",
+                            disconnect_message="OK (skip). Gerät ist bereits DEFAULT. Bitte Gerät abnehmen.",
+                        )
+                            
+                    
+                    if not skip_programming:
                         # 2-5) set default, reset, release, reactivate default, verify, release
                         ok2, sn2 = _apply_target_and_reconnect(gsv, dev_no, sn, cmd_new, ans_new, baud_new=DEFAULT_CANBAUD)
 
@@ -1466,24 +1502,21 @@ def main() -> int:
                         if not ok:
                             print(f"[{_fmt_dev(dev_no, sn)}] WARN: Start-IDs stimmen nicht (trotz activation).")
 
-                        if _same_endpoint(cmd_id, ans_id, cmd_new, ans_new, start_baud, CANBAUD):
-                            print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs == aktuelle YAML-IDs. Skip reprogram/reset.")
-                            results.append({
-                                "dev_no": dev_no,
-                                "serial": sn,
-                                "ok": True,
-                                "state": "new",     # effektiv "already new"
-                                "cmd_old": cmd_id,
-                                "ans_old": ans_id,
-                                "cmd_new": cmd_new,
-                                "ans_new": ans_new,
-                                "baud_old": start_baud,
-                                "baud_new": CANBAUD,
-                            })
-                            already_recorded = True
-                            skip_programming = True
-                            disconnect_reason = "OK (skip). Bitte Gerät abnehmen."
-                            print("-" * 80)
+                    if not skip_programming:
+                        already_recorded, skip_programming, disconnect_reason = _handle_skip_if_same_endpoint(
+                            results=results,
+                            dev_no=dev_no,
+                            sn=sn,
+                            cmd_old=cmd_id,
+                            ans_old=ans_id,
+                            baud_old=start_baud,
+                            cmd_new=cmd_new,
+                            ans_new=ans_new,
+                            baud_new=CANBAUD,
+                            state_on_skip="new",
+                            print_message="Ziel-IDs == aktuelle YAML-IDs. Skip reprogram/reset.",
+                            disconnect_message="OK (skip). Bitte Gerät abnehmen.",
+                        )
                             
                     if not skip_programming:
                         ok2, sn2 = _apply_target_and_reconnect(gsv, dev_no, sn, cmd_new, ans_new, baud_new=CANBAUD)
