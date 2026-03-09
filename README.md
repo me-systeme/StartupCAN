@@ -7,6 +7,25 @@ Vorteile gegenüber GSVmulti:
 * Kein Anschließen per USB und kein verwenden von GSVmulti
 
 
+```mermaid
+flowchart TD
+  B["1. Activate mit current IDs and Baudrate"]
+
+  B -->|FAIL| P
+  B -->|OK| C["2. Serial-Check<br/>wenn serial in current.ids und/oder serial in new.ids"]
+
+  C -->|FAIL| F2["Serial passt nicht / nicht lesbar / Ziel ID konnte nicht bestimmt werden"]
+  C -->|OK| D["3. Read CAN Settings<br/>(best-effort)"]
+
+  D -->|OK/ not OK| E["4. Check <br/>Same Endpoint?"]
+  
+  E -->|No| F["5. Set new IDs and Baudrate<br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
+  E -->|Yes| F3["SUCCESS<br/>current.ids = new.ids"]
+  
+  F -->|FAIL| P["State-Probe<br/>old / new / old_newbaud / new_oldbaud / unknown"]
+  F -->|OK| S["SUCCESS<br/>current.ids = new.ids"]
+
+``` 
 
 
 ##  Case 1 – Device Update (`current.default=false`, `new.default=false`)
@@ -121,26 +140,6 @@ YAML-Update (`config.updated.yaml`) abhängig vom state:
 
 ## Ablauf
 
-
-```mermaid
-flowchart TD
-  B["1. Activate mit current IDs and Baudrate"]
-
-  B -->|FAIL| P
-  B -->|OK| C["2. Serial-Check<br/>wenn serial in current.ids und/oder serial in new.ids"]
-
-  C -->|FAIL| F2["Serial passt nicht / nicht lesbar / Ziel ID konnte nicht bestimmt werden"]
-  C -->|OK| D["3. Read CAN Settings<br/>(best-effort)"]
-
-  D -->|OK/ not OK| E["4. Check <br/>Same Endpoint?"]
-  
-  E -->|No| F["5. Set new IDs and Baudrate<br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
-  E -->|Yes| F3["SUCCESS<br/>current.ids = new.ids"]
-  
-  F -->|FAIL| P["State-Probe<br/>old / new / old_newbaud / new_oldbaud / unknown"]
-  F -->|OK| S["SUCCESS<br/>current.ids = new.ids"]
-
-``` 
 
 **Serial check**
 
