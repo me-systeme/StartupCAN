@@ -626,6 +626,150 @@ def _activate_or_record_failure(
         ans_new_out,
     )
 
+def _resolve_target_ids_after_activate(
+    *,
+    results: list[dict],
+    dev_no: int,
+    sn: int | None,
+    cmd_old: int,
+    ans_old: int,
+    baud_old: int,
+    baud_new: int,
+    cmd_new: int | None,
+    ans_new: int | None,
+    fail_state: str = "old",
+    fail_message: str = "FEHLER: Ziel-IDs konnten nicht bestimmt werden. Dieses Gerät wird übersprungen.",
+) -> tuple[bool, bool, str, int, int]:
+    """
+    Wird NACH erfolgreichem activate() aufgerufen.
+
+    Verhalten:
+    - SN_MODE=False:
+        cmd_new/ans_new müssen bereits gesetzt sein -> einfach zurückgeben
+    - SN_MODE=True:
+        target IDs werden per SN bestimmt
+        bei KeyError wird results.append(...) gemacht und skip_programming aktiviert
+
+    Returns:
+        already_recorded,
+        skip_programming,
+        disconnect_reason,
+        cmd_new,
+        ans_new
+    """
+    # SN_MODE=False => target wurde vorher schon per dev_no bestimmt
+    if not SN_MODE:
+        if cmd_new is None or ans_new is None:
+            raise ValueError(f"SN_MODE=False, aber cmd_new/ans_new fehlen für dev_no={dev_no}")
+        return False, False, "", int(cmd_new), int(ans_new)
+
+    # SN_MODE=True => target jetzt per Seriennummer bestimmen
+    try:
+        cmd_new_resolved, ans_new_resolved = _target_ids(dev_no, sn)
+        print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs per SN-Mapping.")
+        return False, False, "", int(cmd_new_resolved), int(ans_new_resolved)
+
+    except KeyError as e:
+        print(f"[{_fmt_dev(dev_no, sn)}] FEHLER: {e}")
+
+        # Fallback für Ergebniszeile: old beibehalten, wenn new unbekannt ist
+        cmd_new_out = int(cmd_new) if cmd_new is not None else int(cmd_old)
+        ans_new_out = int(ans_new) if ans_new is not None else int(ans_old)
+
+        results.append({
+            "dev_no": int(dev_no),
+            "serial": sn,
+            "ok": False,
+            "state": fail_state,
+            "cmd_old": int(cmd_old),
+            "ans_old": int(ans_old),
+            "cmd_new": int(cmd_new_out),
+            "ans_new": int(ans_new_out),
+            "baud_old": int(baud_old),
+            "baud_new": int(baud_new),
+        })
+
+        return True, True, fail_message, cmd_new_out, ans_new_out
+
+
+def _validate_expected_serial(
+    *,
+    results: list[dict],
+    dev_no: int,
+    expected_sn: int | None,
+    sn: int | None,
+    cmd_old: int,
+    ans_old: int,
+    cmd_new: int,
+    ans_new: int,
+    baud_old: int,
+    baud_new: int,
+    serial_missing_message: str = "Die Seriennummer konnte nicht gelesen werden.",
+    serial_mismatch_message: str = (
+        "Die gelesene Seriennummer stimmt nicht mit der konfigurierten Seriennummer "
+        "aus dem YAML überein. Die Seriennummer aus dem YAML wird im neuen YAML "
+        "mit der gelesenen Seriennummer überschrieben."
+    ),
+) -> tuple[bool, bool, str]:
+    """
+    Prüft erwartete Seriennummer aus YAML gegen gelesene Seriennummer.
+
+    Verhalten:
+    - expected_sn is None -> keine Prüfung, alles OK
+    - sn is None -> Fail append
+    - sn != expected_sn -> Fail append
+    - sonst OK
+
+    Returns:
+        already_recorded,
+        skip_programming,
+        disconnect_reason
+    """
+    if expected_sn is None:
+        return False, False, ""
+
+    if sn is None:
+        print(
+            f"[DEV {dev_no}] FEHLER: YAML erwartet SN={expected_sn}, "
+            "aber Seriennummer konnte nicht gelesen werden. => Device wird NICHT umgestellt."
+        )
+
+        results.append({
+            "dev_no": int(dev_no),
+            "serial": sn,
+            "ok": False,
+            "cmd_old": int(cmd_old),
+            "ans_old": int(ans_old),
+            "cmd_new": int(cmd_new),
+            "ans_new": int(ans_new),
+            "baud_old": int(baud_old),
+            "baud_new": int(baud_new),
+        })
+        print("-" * 80)
+        return True, True, serial_missing_message
+
+    if int(expected_sn) != int(sn):
+        print(
+            f"[{_fmt_dev(dev_no, sn)}] FEHLER: Die gelesene Seriennummer {sn} passt nicht zu YAML "
+            f"(yaml SN={expected_sn}). => Device wird NICHT umgestellt."
+        )
+
+        results.append({
+            "dev_no": int(dev_no),
+            "serial": sn,
+            "ok": False,
+            "cmd_old": int(cmd_old),
+            "ans_old": int(ans_old),
+            "cmd_new": int(cmd_new),
+            "ans_new": int(ans_new),
+            "baud_old": int(baud_old),
+            "baud_new": int(baud_new),
+        })
+        print("-" * 80)
+        return True, True, serial_mismatch_message
+
+    return False, False, ""
+
 
 def _device_fail(
     *,
@@ -837,68 +981,24 @@ def main() -> int:
                         fail_message="Aktivierung (DEFAULT) fehlgeschlagen.",
                     )
 
+                    
 
-
-                    # ok, sn = _try_activate(gsv, dev_no, DEFAULT_CMD_ID, DEFAULT_ANS_ID, canbaud=DEFAULT_CANBAUD, tries=5, delay=0.3, read_sn=True)
-
-                    # if not ok:
-                    #     if SN_MODE:
-                    #         # target IDs sind ohne SN nicht bestimmbar → keine sinnvolle "already new" Probe
-                    #         state = "unknown"
-                    #         _warn_unknown(dev_no, sn, where="activation")
-                    #         cmd_new = DEFAULT_CMD_ID
-                    #         ans_new = DEFAULT_ANS_ID
-                    #     else:
-                    #         cmd_new, ans_new = _new_ids_for(dev_no)   # target schon jetzt bekannt
-                    #         state = _probe_state_after_fail(gsv, dev_no, DEFAULT_CMD_ID, DEFAULT_ANS_ID, cmd_new, ans_new, baud_old=DEFAULT_CANBAUD, baud_new=CANBAUD)
-                    #         if state == "unknown":
-                    #             _warn_unknown(dev_no, sn, where="state-probe")
-
-                    #     results.append({
-                    #         "dev_no": dev_no,
-                    #         "serial": sn,
-                    #         "ok": False,
-                    #         "state": state,
-                    #         "cmd_old": DEFAULT_CMD_ID,
-                    #         "ans_old": DEFAULT_ANS_ID,
-                    #         "cmd_new": cmd_new,
-                    #         "baud_old": DEFAULT_CANBAUD,
-                    #         "baud_new": CANBAUD,
-                    #         "ans_new": ans_new,
-                    #     })
-                    #     already_recorded = True
-                    #     skip_programming = True
-                    #     disconnect_reason = f"Aktivierung (DEFAULT) fehlgeschlagen. State probe={state}. Gerät abnehmen."
-                        
                     if not skip_programming:
-                        if SN_MODE:
-                            try:
-                                cmd_new, ans_new = _target_ids(dev_no, sn)
-                                print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs per SN-Mapping.")
-                            except KeyError as e:
-                                print(f"[{_fmt_dev(dev_no, sn)}] FEHLER: {e}")
+                        already_recorded, skip_programming, disconnect_reason, cmd_new, ans_new = _resolve_target_ids_after_activate(
+                            results=results,
+                            dev_no=dev_no,
+                            sn=sn,
+                            cmd_old=DEFAULT_CMD_ID,
+                            ans_old=DEFAULT_ANS_ID,
+                            baud_old=DEFAULT_CANBAUD,
+                            baud_new=CANBAUD,
+                            cmd_new=cmd_new,
+                            ans_new=ans_new,
+                            fail_state="old",
+                            fail_message="FEHLER: Ziel-IDs konnten nicht bestimmt werden. Dieses Gerät wird übersprungen.",
+                        )
 
-                                results.append({
-                                    "dev_no": dev_no,
-                                    "serial": sn,
-                                    "ok": False,
-                                    "state": "old",
-                                    "cmd_old": DEFAULT_CMD_ID,
-                                    "ans_old": DEFAULT_ANS_ID,
-                                    "cmd_new": DEFAULT_CMD_ID,
-                                    "ans_new": DEFAULT_ANS_ID,
-                                    "baud_old": DEFAULT_CANBAUD,
-                                    "baud_new": CANBAUD,
-                                })
-                                already_recorded = True
-                                skip_programming = True
-                                disconnect_reason = "FEHLER: Ziel-IDs konnten nicht bestimmt werden. Dieses Gerät wird übersprungen."
-                        else: 
-                            # dev_no mapping: sollte durch config garantiert sein → kein try/except nötig
-                            cmd_new, ans_new = _new_ids_for(dev_no)
-                            print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs per dev_no-Mapping.")
                 
-        
                             
                     if not skip_programming:
                         # --- SKIP: Ziel ist Default und wir sind bereits auf Default aktiv ---
@@ -1105,75 +1205,21 @@ def main() -> int:
                         fail_message="Aktivierung (current IDs) fehlgeschlagen.",
                     )
 
-                    # # 1) activate mit current IDs
-                    # ok, sn = _try_activate(gsv, dev_no, cmd_start, ans_start, canbaud=start_baud, tries=5, delay=0.3, read_sn=True)
-                    # if not ok:
-                    #     state = _probe_state_after_fail(gsv, dev_no, cmd_start, ans_start, DEFAULT_CMD_ID, DEFAULT_ANS_ID, baud_old=start_baud, baud_new=DEFAULT_CANBAUD)
-                    #     if state == "unknown":
-                    #         _warn_unknown(dev_no, sn, where="state-probe")
 
-                    #     results.append({
-                    #         "dev_no": dev_no,
-                    #         "serial": sn,
-                    #         "ok": False,
-                    #         "state": state,
-                    #         "cmd_old": cmd_start,
-                    #         "ans_old": ans_start,
-                    #         "cmd_new": DEFAULT_CMD_ID,
-                    #         "ans_new": DEFAULT_ANS_ID,
-                    #         "baud_old": start_baud,
-                    #         "baud_new": DEFAULT_CANBAUD,
-                    #     })
-                    #     already_recorded = True
-                    #     skip_programming = True
-                    #     disconnect_reason = f"Aktivierung (current IDs) fehlgeschlagen. State probe={state}. Gerät abnehmen."
-                        
-                    
-                    # Wenn current.ids serial angibt: muss matchen (und muss lesbar sein)
-                    if expected_sn is not None:
-                        if not skip_programming:
-                            if sn is None:
-                                print(
-                                    f"[DEV {dev_no}] FEHLER: YAML erwartet SN={expected_sn}, "
-                                    "aber Seriennummer konnte nicht gelesen werden. => Device wird NICHT umgestellt."
-                                )
-                                results.append({
-                                    "dev_no": dev_no,
-                                    "serial": sn,
-                                    "ok": False,
-                                    "cmd_old": cmd_start,
-                                    "ans_old": ans_start,
-                                    "cmd_new": cmd_new,
-                                    "ans_new": ans_new,
-                                    "baud_old": start_baud,
-                                    "baud_new": DEFAULT_CANBAUD,
-                                })
-                                already_recorded = True
-                                skip_programming = True
-                                disconnect_reason ="Die Seriennummer konnte nicht gelesen werden."
-                                print("-" * 80)
-                                
-                        if not skip_programming:
-                            if int(expected_sn) != int(sn):
-                                print(
-                                    f"[{_fmt_dev(dev_no, sn)}] FEHLER: Die gelesene Seriennummer {sn} passt nicht zu YAML current.ids "
-                                    f"(yaml SN={expected_sn}). => Device wird NICHT umgestellt."
-                                )
-                                results.append({
-                                    "dev_no": dev_no,
-                                    "serial": sn,
-                                    "ok": False,
-                                    "cmd_old": cmd_start,
-                                    "ans_old": ans_start,
-                                    "cmd_new": cmd_new,
-                                    "ans_new": ans_new,
-                                    "baud_old": start_baud,
-                                    "baud_new": DEFAULT_CANBAUD,
-                                })
-                                already_recorded = True
-                                skip_programming = True
-                                disconnect_reason ="Die gelesene Seriennummer stimmt nicht mit der konfigurierten Seriennummer aus dem YAML überein. Die Seriennummer aus dem YAML wird im neuen YAML mit der gelesenen Seriennummer überschrieben."
-                                print("-" * 80)
+                    if not skip_programming:
+                        already_recorded, skip_programming, disconnect_reason = _validate_expected_serial(
+                            results=results,
+                            dev_no=dev_no,
+                            expected_sn=expected_sn,
+                            sn=sn,
+                            cmd_old=cmd_start,
+                            ans_old=ans_start,
+                            cmd_new=cmd_new,
+                            ans_new=ans_new,
+                            baud_old=start_baud,
+                            baud_new=DEFAULT_CANBAUD,
+                        )
+   
                                 
                     if not skip_programming:
                         # --- SKIP: Gerät ist laut current.ids bereits DEFAULT ---
@@ -1380,108 +1426,37 @@ def main() -> int:
                     )
 
                     
-                    # ok, sn = _try_activate(gsv, dev_no, cmd_id, ans_id, canbaud=start_baud, tries=5, delay=0.3, read_sn=True)
-                    # if not ok:
-                    #     if SN_MODE:
-                    #         # Target unbekannt ohne SN -> keine probe auf new
-                    #         state = "unknown"
-                    #         _warn_unknown(dev_no, sn, where="state-probe")
-                    #         cmd_new, ans_new = cmd_id, ans_id  # oder 0/0
-                    #     else:
-                    #         cmd_new, ans_new = _new_ids_for(dev_no)
-                    #         state = _probe_state_after_fail(gsv, dev_no, cmd_id, ans_id, cmd_new, ans_new, baud_old=start_baud, baud_new=CANBAUD)
-                    #         if state == "unknown":
-                    #             _warn_unknown(dev_no, sn, where="state-probe")
 
-                    #     results.append({
-                    #         "dev_no": dev_no,
-                    #         "serial": sn,
-                    #         "ok": False,
-                    #         "state": state,
-                    #         "cmd_old": cmd_id,
-                    #         "ans_old": ans_id,
-                    #         "cmd_new": cmd_new,
-                    #         "ans_new": ans_new,
-                    #         "baud_old": start_baud,
-                    #         "baud_new": CANBAUD,
-                    #     })
-                    #     already_recorded = True
-                    #     skip_programming = True
-                    #     disconnect_reason = f"Activation failed. State probe={state}. Gerät abnehmen."
-                    
                     if not skip_programming:
-                        if SN_MODE:
-                            try:
-                                cmd_new, ans_new = _target_ids(dev_no, sn)
-                                print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs per SN-Mapping.")
-                            except KeyError as e:
-                                print(f"[{_fmt_dev(dev_no, sn)}] FEHLER: {e}")
-                                
-                                cmd_new, ans_new = cmd_id, ans_id
-                                results.append({
-                                    "dev_no": dev_no,
-                                    "serial": sn,
-                                    "ok": False,
-                                    "state": "old",
-                                    "cmd_old": cmd_id,
-                                    "ans_old": ans_id,
-                                    "cmd_new": cmd_new,
-                                    "ans_new": ans_new,
-                                    "baud_old": start_baud,
-                                    "baud_new": CANBAUD,
-                                })
-                                already_recorded = True
-                                skip_programming = True
-                                disconnect_reason = "FEHLER: Ziel-IDs konnten nicht bestimmt werden. Dieses Gerät wird übersprungen."
-                        else: 
-                            # dev_no mapping: sollte durch config garantiert sein → kein try/except nötig
-                            cmd_new, ans_new = _new_ids_for(dev_no)
-                            print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs per dev_no-Mapping.")
+                        already_recorded, skip_programming, disconnect_reason, cmd_new, ans_new = _resolve_target_ids_after_activate(
+                            results=results,
+                            dev_no=dev_no,
+                            sn=sn,
+                            cmd_old=cmd_id,
+                            ans_old=ans_id,
+                            baud_old=start_baud,
+                            baud_new=CANBAUD,
+                            cmd_new=cmd_new,
+                            ans_new=ans_new,
+                            fail_state="old",
+                            fail_message="FEHLER: Ziel-IDs konnten nicht bestimmt werden. Dieses Gerät wird übersprungen.",
+                        )
+ 
                     
-                    if expected_sn is not None:
-                        if not skip_programming:
-                            if sn is None:
-                                print(
-                                    f"[DEV {dev_no}] FEHLER: YAML erwartet SN={expected_sn}, "
-                                    "aber Seriennummer konnte nicht gelesen werden. => Device wird NICHT umgestellt."
-                                )
-                                results.append({
-                                    "dev_no": dev_no,
-                                    "serial": sn,
-                                    "ok": False,
-                                    "cmd_old": cmd_id,
-                                    "ans_old": ans_id,
-                                    "cmd_new": cmd_new,
-                                    "ans_new": ans_new,
-                                    "baud_old": start_baud,
-                                    "baud_new": CANBAUD,
-                                })
-                                already_recorded = True
-                                skip_programming = True
-                                disconnect_reason = "Die Seriennummer konnte nicht gelesen werden."
-                                print("-" * 80)
 
-                        if not skip_programming:
-                            if int(expected_sn) != int(sn):
-                                print(
-                                    f"[{_fmt_dev(dev_no, sn)}] FEHLER: Die gelesene Seriennummer {sn} passt nicht zu YAML current.ids"
-                                    f"(yaml SN={expected_sn}). => Device wird NICHT umgestellt."
-                                )
-                                results.append({
-                                    "dev_no": dev_no,
-                                    "serial": sn,
-                                    "ok": False,
-                                    "cmd_old": cmd_id,
-                                    "ans_old": ans_id,
-                                    "cmd_new": cmd_new,
-                                    "ans_new": ans_new,
-                                    "baud_old": start_baud,
-                                    "baud_new": CANBAUD,
-                                })
-                                already_recorded = True
-                                skip_programming = True
-                                disconnect_reason = "Die gelesene Seriennummer stimmt nicht mit der konfigurierten Seriennummer aus dem YAML überein. Die Seriennummer aus dem YAML wird im neuen YAML mit der gelesenen Seriennummer überschrieben."
-                                print("-" * 80)
+                    if not skip_programming:
+                        already_recorded, skip_programming, disconnect_reason = _validate_expected_serial(
+                            results=results,
+                            dev_no=dev_no,
+                            expected_sn=expected_sn,
+                            sn=sn,
+                            cmd_old=cmd_id,
+                            ans_old=ans_id,
+                            cmd_new=cmd_new,
+                            ans_new=ans_new,
+                            baud_old=start_baud,
+                            baud_new=CANBAUD,
+                        )
 
                                 
                     if not skip_programming:
