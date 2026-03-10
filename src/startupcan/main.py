@@ -261,6 +261,73 @@ def _apply_target_and_reconnect(
         print(f"[{_fmt_dev(dev_no, serial)}] set/reset/reactivate/verify/release FAIL: {e}")
         _safe_release(gsv, dev_no, where="set_ids:except")
         return False, serial
+
+def _apply_target_or_record_result(
+    *,
+    gsv: GSV86CAN,
+    results: list[dict],
+    dev_no: int,
+    sn: int | None,
+    cmd_old: int,
+    ans_old: int,
+    baud_old: int,
+    cmd_new: int,
+    ans_new: int,
+    baud_new: int,
+    success_message: str,
+    failure_message: str,
+) -> tuple[int | None, bool, bool, str]:
+    """
+    Programmiert Ziel-IDs/Ziel-Baud, reaktiviert, bestimmt den effektiven state
+    und schreibt das Ergebnis direkt nach results.
+
+    Returns:
+        sn_out,
+        already_recorded,
+        skip_programming,
+        disconnect_reason
+    """
+    ok2, sn2 = _apply_target_and_reconnect(
+        gsv,
+        dev_no,
+        sn,
+        cmd_new,
+        ans_new,
+        baud_new=baud_new,
+    )
+
+    sn_out = sn2 if sn2 is not None else sn
+
+    state = "new" if ok2 else _probe_state_after_fail(
+        gsv,
+        dev_no,
+        cmd_old,
+        ans_old,
+        cmd_new,
+        ans_new,
+        baud_old=baud_old,
+        baud_new=baud_new,
+    )
+
+    if state == "unknown":
+        _warn_unknown(dev_no, sn_out, where="state-probe")
+
+    results.append({
+        "dev_no": int(dev_no),
+        "serial": sn_out,
+        "ok": bool(ok2),
+        "state": state,
+        "cmd_old": int(cmd_old),
+        "ans_old": int(ans_old),
+        "cmd_new": int(cmd_new),
+        "ans_new": int(ans_new),
+        "baud_old": int(baud_old),
+        "baud_new": int(baud_new),
+    })
+
+    disconnect_reason = success_message if ok2 else failure_message.format(state=state)
+
+    return sn_out, True, True, disconnect_reason
     
 def _print_summary(rows: list[dict]):
     print("\n" + "=" * 80)
@@ -1065,41 +1132,22 @@ def main() -> int:
                         )
 
                             
-                    
                     if not skip_programming:
-                        ok2, sn2 = _apply_target_and_reconnect(gsv, dev_no, sn, cmd_new, ans_new, baud_new=CANBAUD)
-
-                        if sn2 is not None:
-                            sn = sn2
-
-
-                        state = "new" if ok2 else _probe_state_after_fail(
-                            gsv, dev_no,
-                            DEFAULT_CMD_ID, DEFAULT_ANS_ID,
-                            cmd_new, ans_new, baud_old=DEFAULT_CANBAUD,
+                        sn, already_recorded, skip_programming, disconnect_reason = _apply_target_or_record_result(
+                            gsv=gsv,
+                            results=results,
+                            dev_no=dev_no,
+                            sn=sn,
+                            cmd_old=DEFAULT_CMD_ID,
+                            ans_old=DEFAULT_ANS_ID,
+                            baud_old=DEFAULT_CANBAUD,
+                            cmd_new=cmd_new,
+                            ans_new=ans_new,
                             baud_new=CANBAUD,
+                            success_message="✅ OK: Gerät wurde auf die neuen IDs umgestellt. Bitte abnehmen.",
+                            failure_message="FEHLER: Umstellung fehlgeschlagen (state={state}). Bitte abnehmen.",
                         )
-                        if state == "unknown":
-                            _warn_unknown(dev_no, sn, where="state-probe")
-
-                        results.append({
-                            "dev_no": dev_no,
-                            "serial": sn,
-                            "ok": bool(ok2),
-                            "state": state,
-                            "cmd_old": DEFAULT_CMD_ID,
-                            "ans_old": DEFAULT_ANS_ID,
-                            "cmd_new": cmd_new,
-                            "ans_new": ans_new,
-                            "baud_old": DEFAULT_CANBAUD,
-                            "baud_new": CANBAUD,
-                        })
-                        already_recorded = True
                         
-                        if ok2:
-                            disconnect_reason = "✅ OK: Gerät wurde auf die neuen IDs umgestellt. Bitte abnehmen."
-                        else:
-                            disconnect_reason = f"FEHLER: Umstellung fehlgeschlagen (state={state}). Bitte abnehmen."
                 except KeyboardInterrupt:
                     aborted = True
                     disconnect_reason = "⏭️ Abbruch (Ctrl+C) im Device-Step. Gerät wird freigegeben. Bitte abnehmen."
@@ -1283,36 +1331,23 @@ def main() -> int:
                             disconnect_message="OK (skip). Gerät ist bereits DEFAULT. Bitte Gerät abnehmen.",
                         )
                             
-                    
                     if not skip_programming:
                         # 2-5) set default, reset, release, reactivate default, verify, release
-                        ok2, sn2 = _apply_target_and_reconnect(gsv, dev_no, sn, cmd_new, ans_new, baud_new=DEFAULT_CANBAUD)
-
-                        if sn2 is not None:
-                            sn = sn2
-
-                        state = "new" if ok2 else _probe_state_after_fail(
-                            gsv, dev_no,
-                            cmd_start, ans_start,
-                            cmd_new, ans_new,
-                            baud_old=start_baud, baud_new=DEFAULT_CANBAUD
+                        sn, already_recorded, skip_programming, disconnect_reason = _apply_target_or_record_result(
+                            gsv=gsv,
+                            results=results,
+                            dev_no=dev_no,
+                            sn=sn,
+                            cmd_old=cmd_start,
+                            ans_old=ans_start,
+                            baud_old=start_baud,
+                            cmd_new=cmd_new,
+                            ans_new=ans_new,
+                            baud_new=DEFAULT_CANBAUD,
+                            success_message="✅ OK: Gerät ist jetzt DEFAULT. Bitte abnehmen.",
+                            failure_message="FEHLER: Reset auf DEFAULT fehlgeschlagen (state={state}). Bitte abnehmen.",
                         )
-                        if state == "unknown":
-                            _warn_unknown(dev_no, sn, where="state-probe")
 
-                        results.append({
-                            "dev_no": dev_no, "serial": sn,
-                            "ok": bool(ok2), "state": state,
-                            "cmd_old": cmd_start, "ans_old": ans_start,
-                            "cmd_new": cmd_new, "ans_new": ans_new,
-                            "baud_old": start_baud, "baud_new": DEFAULT_CANBAUD,
-                        })
-                        already_recorded = True
-
-                        if ok2:
-                            disconnect_reason = "✅ OK: Gerät ist jetzt DEFAULT. Bitte abnehmen."
-                        else:
-                            disconnect_reason = f"FEHLER: Reset auf DEFAULT fehlgeschlagen (state={state}). Bitte abnehmen."
                 except KeyboardInterrupt:
                     aborted = True
                     disconnect_reason = "⏭️ Abbruch (Ctrl+C) im Device-Step. Gerät wird freigegeben. Bitte abnehmen."
@@ -1519,34 +1554,21 @@ def main() -> int:
                         )
                             
                     if not skip_programming:
-                        ok2, sn2 = _apply_target_and_reconnect(gsv, dev_no, sn, cmd_new, ans_new, baud_new=CANBAUD)
+                        sn, already_recorded, skip_programming, disconnect_reason = _apply_target_or_record_result(
+                            gsv=gsv,
+                            results=results,
+                            dev_no=dev_no,
+                            sn=sn,
+                            cmd_old=cmd_id,
+                            ans_old=ans_id,
+                            baud_old=start_baud,
+                            cmd_new=cmd_new,
+                            ans_new=ans_new,
+                            baud_new=CANBAUD,
+                            success_message="✅ OK: Gerät wurde auf die neuen IDs umgestellt. Bitte abnehmen.",
+                            failure_message="FEHLER: Reset auf DEFAULT fehlgeschlagen (state={state}). Bitte abnehmen.",
+                        )
                         
-                        if sn2 is not None:
-                            sn = sn2
-
-                        state = "new" if ok2 else _probe_state_after_fail(gsv, dev_no, cmd_id, ans_id, cmd_new, ans_new, baud_old=start_baud, baud_new=CANBAUD)
-                        if state == "unknown":
-                            _warn_unknown(dev_no, sn, where="state-probe")
-
-                        results.append({
-                            "dev_no": dev_no,
-                            "serial": sn,
-                            "ok": bool(ok2),
-                            "state": state,
-                            "cmd_old": cmd_id,
-                            "ans_old": ans_id,
-                            "cmd_new": cmd_new,
-                            "ans_new": ans_new,
-                            "baud_old": start_baud,
-                            "baud_new": CANBAUD,
-                        })
-                        already_recorded = True
-                        print("-" * 80)
-
-                        if ok2:
-                            disconnect_reason = "✅ OK: Gerät wurde auf die neuen IDs umgestellt. Bitte abnehmen."
-                        else:
-                            disconnect_reason = f"FEHLER: Reset auf DEFAULT fehlgeschlagen (state={state}). Bitte abnehmen."
                 except KeyboardInterrupt:
                     aborted = True
                     disconnect_reason = "⏭️ Abbruch (Ctrl+C) im Device-Step. Gerät wird freigegeben. Bitte abnehmen."
