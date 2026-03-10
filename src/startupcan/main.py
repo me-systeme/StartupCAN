@@ -47,10 +47,19 @@ class DevicePlan:
             ans_new=int(ans_new),
             baud_new=self.baud_new,
         )
+    def with_safe_new_ids(self) -> "DevicePlan":
+        return DevicePlan(
+            dev_no=self.dev_no,
+            cmd_old=self.cmd_old,
+            ans_old=self.ans_old,
+            baud_old=self.baud_old,
+            cmd_new=int(self.cmd_new) if self.cmd_new is not None else int(self.cmd_old),
+            ans_new=int(self.ans_new) if self.ans_new is not None else int(self.ans_old),
+            baud_new=self.baud_new,
+        )
 
 from startupcan.config import (
     DEVICE_CONFIG,
-    DEVICE_CURRENT,
     DEVICE_NEW,
     CURRENT_DEFAULT_MODE,
     NEW_DEFAULT_MODE,
@@ -294,14 +303,8 @@ def _apply_target_or_record_result(
     *,
     gsv: GSV86CAN,
     results: list[dict],
-    dev_no: int,
+    plan: DevicePlan,
     sn: int | None,
-    cmd_old: int,
-    ans_old: int,
-    baud_old: int,
-    cmd_new: int,
-    ans_new: int,
-    baud_new: int,
     success_message: str,
     failure_message: str,
 ) -> tuple[int | None, bool, bool, str]:
@@ -315,40 +318,42 @@ def _apply_target_or_record_result(
         skip_programming,
         disconnect_reason
     """
+    if plan.cmd_new is None or plan.ans_new is None:
+        raise ValueError(f"plan.cmd_new/ans_new fehlen für dev_no={plan.dev_no}")
     ok2, sn2 = _apply_target_and_reconnect(
         gsv,
-        dev_no,
+        plan.dev_no,
         sn,
-        cmd_new,
-        ans_new,
-        baud_new=baud_new,
+        plan.cmd_new,
+        plan.ans_new,
+        baud_new=plan.baud_new,
     )
 
     sn_out = sn2 if sn2 is not None else sn
 
     state = "new" if ok2 else _probe_state_after_fail(
         gsv,
-        dev_no,
-        cmd_old,
-        ans_old,
-        cmd_new,
-        ans_new,
-        baud_old=baud_old,
-        baud_new=baud_new,
+        plan.dev_no,
+        plan.cmd_old,
+        plan.ans_old,
+        plan.cmd_new,
+        plan.ans_new,
+        baud_old=plan.baud_old,
+        baud_new=plan.baud_new,
     )
 
     _record_result(
         results=results,
-        dev_no=dev_no,
+        dev_no=plan.dev_no,
         sn=sn_out,
         ok=bool(ok2),
         state=state,
-        cmd_old=cmd_old,
-        ans_old=ans_old,
-        cmd_new=cmd_new,
-        ans_new=ans_new,
-        baud_old=baud_old,
-        baud_new=baud_new,
+        cmd_old=plan.cmd_old,
+        ans_old=plan.ans_old,
+        cmd_new=plan.cmd_new,
+        ans_new=plan.ans_new,
+        baud_old=plan.baud_old,
+        baud_new=plan.baud_new,
         warn_unknown=True,
         warn_where="state-probe",
     )
@@ -663,13 +668,7 @@ def _activate_or_record_failure(
     *,
     gsv: GSV86CAN,
     results: list[dict],
-    dev_no: int,
-    cmd_old: int,
-    ans_old: int,
-    baud_old: int,
-    cmd_new: int | None,
-    ans_new: int | None,
-    baud_new: int,
+    plan: DevicePlan,
     tries: int = 5,
     delay: float = 0.3,
     read_sn: bool = True,
@@ -695,10 +694,10 @@ def _activate_or_record_failure(
     """
     ok, sn = _try_activate(
         gsv,
-        dev_no,
-        cmd_old,
-        ans_old,
-        canbaud=baud_old,
+        plan.dev_no,
+        plan.cmd_old,
+        plan.ans_old,
+        canbaud=plan.baud_old,
         tries=tries,
         delay=delay,
         read_sn=read_sn,
@@ -714,39 +713,37 @@ def _activate_or_record_failure(
         )
 
     # activate fehlgeschlagen
-    if sn_mode_requires_known_target or cmd_new is None or ans_new is None:
+    if sn_mode_requires_known_target or plan.cmd_new is None or plan.ans_new is None:
         state = "unknown"
-        cmd_new_out = int(cmd_old)
-        ans_new_out = int(ans_old)
+        fail_plan = plan.with_safe_new_ids()
     else:
-        cmd_new_out = int(cmd_new)
-        ans_new_out = int(ans_new)
+        fail_plan = plan
 
         state = _probe_state_after_fail(
             gsv,
-            dev_no,
-            int(cmd_old),
-            int(ans_old),
-            cmd_new_out,
-            ans_new_out,
-            baud_old=int(baud_old),
-            baud_new=int(baud_new),
+            fail_plan.dev_no,
+            fail_plan.cmd_old,
+            fail_plan.ans_old,
+            fail_plan.cmd_new,
+            fail_plan.ans_new,
+            baud_old=fail_plan.baud_old,
+            baud_new=fail_plan.baud_new,
         )
 
     _record_result(
         results=results,
-        dev_no=dev_no,
+        dev_no=fail_plan.dev_no,
         sn=sn,
         ok=False,
         state=state,
-        cmd_old=cmd_old,
-        ans_old=ans_old,
-        cmd_new=cmd_new_out,
-        ans_new=ans_new_out,
-        baud_old=baud_old,
-        baud_new=baud_new,
+        cmd_old=fail_plan.cmd_old,
+        ans_old=fail_plan.ans_old,
+        cmd_new=fail_plan.cmd_new,
+        ans_new=fail_plan.ans_new,
+        baud_old=fail_plan.baud_old,
+        baud_new=fail_plan.baud_new,
         warn_unknown=True,
-        warn_where=warn_where
+        warn_where=warn_where,
     )
 
     return (
@@ -760,17 +757,11 @@ def _activate_or_record_failure(
 def _resolve_target_ids_after_activate(
     *,
     results: list[dict],
-    dev_no: int,
+    plan: DevicePlan,
     sn: int | None,
-    cmd_old: int,
-    ans_old: int,
-    baud_old: int,
-    baud_new: int,
-    cmd_new: int | None,
-    ans_new: int | None,
     fail_state: str = "old",
     fail_message: str = "FEHLER: Ziel-IDs konnten nicht bestimmt werden. Dieses Gerät wird übersprungen.",
-) -> tuple[bool, bool, str, int, int]:
+) -> tuple[DevicePlan, bool, bool, str]:
     """
     Wird NACH erfolgreichem activate() aufgerufen.
 
@@ -781,60 +772,51 @@ def _resolve_target_ids_after_activate(
         target IDs werden per SN bestimmt
 
     Returns:
+        plan,
         already_recorded,
         skip_programming,
-        disconnect_reason,
-        cmd_new,
-        ans_new
+        disconnect_reason
     """
     # SN_MODE=False => target wurde vorher schon per dev_no bestimmt
     if not SN_MODE:
-        if cmd_new is None or ans_new is None:
-            raise ValueError(f"SN_MODE=False, aber cmd_new/ans_new fehlen für dev_no={dev_no}")
-        return False, False, "", int(cmd_new), int(ans_new)
+        if plan.cmd_new is None or plan.ans_new is None:
+            raise ValueError(f"SN_MODE=False, aber cmd_new/ans_new fehlen für dev_no={plan.dev_no}")
+        return plan, False, False, ""
 
     # SN_MODE=True => target jetzt per Seriennummer bestimmen
     try:
-        cmd_new_resolved, ans_new_resolved = _target_ids(dev_no, sn)
-        print(f"[{_fmt_dev(dev_no, sn)}] Ziel-IDs per SN-Mapping.")
-        return False, False, "", int(cmd_new_resolved), int(ans_new_resolved)
+        cmd_new, ans_new = _target_ids(plan.dev_no, sn)
+        print(f"[{_fmt_dev(plan.dev_no, sn)}] Ziel-IDs per SN-Mapping.")
+        return plan.with_new_ids(cmd_new, ans_new), False, False, ""
 
     except KeyError as e:
-        print(f"[{_fmt_dev(dev_no, sn)}] FEHLER: {e}")
+        print(f"[{_fmt_dev(plan.dev_no, sn)}] FEHLER: {e}")
 
-        # Fallback für Ergebniszeile: old beibehalten, wenn new unbekannt ist
-        cmd_new_out = int(cmd_new) if cmd_new is not None else int(cmd_old)
-        ans_new_out = int(ans_new) if ans_new is not None else int(ans_old)
+        fail_plan = plan.with_safe_new_ids()
 
         _record_result(
             results=results,
-            dev_no=dev_no,
+            dev_no=fail_plan.dev_no,
             sn=sn,
             ok=False,
             state=fail_state,
-            cmd_old=cmd_old,
-            ans_old=ans_old,
-            cmd_new=cmd_new_out,
-            ans_new=ans_new_out,
-            baud_old=baud_old,
-            baud_new=baud_new,
+            cmd_old=fail_plan.cmd_old,
+            ans_old=fail_plan.ans_old,
+            cmd_new=fail_plan.cmd_new,
+            ans_new=fail_plan.ans_new,
+            baud_old=fail_plan.baud_old,
+            baud_new=fail_plan.baud_new,
         )
 
-        return True, True, fail_message, cmd_new_out, ans_new_out
+        return fail_plan, True, True, fail_message
 
 
 def _validate_expected_serial(
     *,
     results: list[dict],
-    dev_no: int,
+    plan: DevicePlan,
     expected_sn: int | None,
     sn: int | None,
-    cmd_old: int,
-    ans_old: int,
-    cmd_new: int,
-    ans_new: int,
-    baud_old: int,
-    baud_new: int,
     serial_missing_message: str = "Die Seriennummer konnte nicht gelesen werden.",
     serial_mismatch_message: str = (
         "Die gelesene Seriennummer stimmt nicht mit der konfigurierten Seriennummer "
@@ -858,47 +840,49 @@ def _validate_expected_serial(
     """
     if expected_sn is None:
         return False, False, ""
+    
+    safe_plan = plan.with_safe_new_ids()
 
     if sn is None:
         print(
-            f"[DEV {dev_no}] FEHLER: YAML erwartet SN={expected_sn}, "
+            f"[DEV {safe_plan.dev_no}] FEHLER: YAML erwartet SN={expected_sn}, "
             "aber Seriennummer konnte nicht gelesen werden. => Device wird NICHT umgestellt."
         )
 
         _record_result(
             results=results,
-            dev_no=dev_no,
+            dev_no=safe_plan.dev_no,
             sn=sn,
             ok=False,
             state="old",
-            cmd_old=cmd_old,
-            ans_old=ans_old,
-            cmd_new=cmd_new,
-            ans_new=ans_new,
-            baud_old=baud_old,
-            baud_new=baud_new,
+            cmd_old=safe_plan.cmd_old,
+            ans_old=safe_plan.ans_old,
+            cmd_new=safe_plan.cmd_new,
+            ans_new=safe_plan.ans_new,
+            baud_old=safe_plan.baud_old,
+            baud_new=safe_plan.baud_new,
         )
         print("-" * 80)
         return True, True, serial_missing_message
 
     if int(expected_sn) != int(sn):
         print(
-            f"[{_fmt_dev(dev_no, sn)}] FEHLER: Die gelesene Seriennummer {sn} passt nicht zu YAML "
+            f"[{_fmt_dev(plan.dev_no, sn)}] FEHLER: Die gelesene Seriennummer {sn} passt nicht zu YAML "
             f"(yaml SN={expected_sn}). => Device wird NICHT umgestellt."
         )
 
         _record_result(
             results=results,
-            dev_no=dev_no,
+            dev_no=safe_plan.dev_no,
             sn=sn,
             ok=False,
             state="old",
-            cmd_old=cmd_old,
-            ans_old=ans_old,
-            cmd_new=cmd_new,
-            ans_new=ans_new,
-            baud_old=baud_old,
-            baud_new=baud_new,
+            cmd_old=safe_plan.cmd_old,
+            ans_old=safe_plan.ans_old,
+            cmd_new=safe_plan.cmd_new,
+            ans_new=safe_plan.ans_new,
+            baud_old=safe_plan.baud_old,
+            baud_new=safe_plan.baud_new,
         )
         
         print("-" * 80)
@@ -909,14 +893,8 @@ def _validate_expected_serial(
 def _handle_skip_if_same_endpoint(
     *,
     results: list[dict],
-    dev_no: int,
+    plan: DevicePlan,
     sn: int | None,
-    cmd_old: int,
-    ans_old: int,
-    baud_old: int,
-    cmd_new: int,
-    ans_new: int,
-    baud_new: int,
     state_on_skip: str = "old",
     print_message: str = "Ziel-IDs entsprechen bereits dem aktuellen Zustand. Skip umstellen.",
     disconnect_message: str = "OK (skip). Bitte Gerät abnehmen.",
@@ -930,23 +908,30 @@ def _handle_skip_if_same_endpoint(
         skip_programming,
         disconnect_reason
     """
-    if not _same_endpoint(cmd_old, ans_old, cmd_new, ans_new, baud_old, baud_new):
+    if plan.cmd_new is None or plan.ans_new is None:
+        return False, False, ""
+    
+    if not _same_endpoint(
+        plan.cmd_old, plan.ans_old,
+        plan.cmd_new, plan.ans_new,
+        plan.baud_old, plan.baud_new,
+    ):
         return False, False, ""
 
-    print(f"[{_fmt_dev(dev_no, sn)}] {print_message}")
+    print(f"[{_fmt_dev(plan.dev_no, sn)}] {print_message}")
 
     _record_result(
         results=results,
-        dev_no=dev_no,
+        dev_no=plan.dev_no,
         sn=sn,
         ok=True,
         state=state_on_skip,
-        cmd_old=cmd_old,
-        ans_old=ans_old,
-        cmd_new=cmd_new,
-        ans_new=ans_new,
-        baud_old=baud_old,
-        baud_new=baud_new,
+        cmd_old=plan.cmd_old,
+        ans_old=plan.ans_old,
+        cmd_new=plan.cmd_new,
+        ans_new=plan.ans_new,
+        baud_old=plan.baud_old,
+        baud_new=plan.baud_new,
     )
 
     return True, True, disconnect_message
@@ -955,15 +940,9 @@ def _handle_keyboard_interrupt(
     *,
     gsv: GSV86CAN,
     results: list[dict],
-    dev_no: int,
+    plan: DevicePlan,
     sn: int | None,
     already_recorded: bool,
-    cmd_old: int,
-    ans_old: int,
-    cmd_new: int,
-    ans_new: int,
-    baud_old: int,
-    baud_new: int,
     disconnect_message: str = "⏭️ Abbruch (Ctrl+C) im Device-Step. Gerät wird freigegeben. Bitte abnehmen.",
     warn_where: str = "Abbruch (Ctrl+C)",
 ) -> tuple[bool, bool, str]:
@@ -978,21 +957,22 @@ def _handle_keyboard_interrupt(
     aborted = True
     disconnect_reason = disconnect_message
 
-    _safe_release(gsv, dev_no, where="device-step/Ctrl+C")
+    safe_plan = plan.with_safe_new_ids()
+    _safe_release(gsv, safe_plan.dev_no, where="device-step/Ctrl+C")
 
     if not already_recorded:
         already_recorded = _record_result(
             results=results,
-            dev_no=dev_no,
+            dev_no=safe_plan.dev_no,
             sn=sn,
             ok=False,
             state="unknown",
-            cmd_old=cmd_old,
-            ans_old=ans_old,
-            cmd_new=cmd_new,
-            ans_new=ans_new,
-            baud_old=baud_old,
-            baud_new=baud_new,
+            cmd_old=safe_plan.cmd_old,
+            ans_old=safe_plan.ans_old,
+            cmd_new=safe_plan.cmd_new,
+            ans_new=safe_plan.ans_new,
+            baud_old=safe_plan.baud_old,
+            baud_new=safe_plan.baud_new,
             warn_unknown=True,
             warn_where=warn_where,
         )
@@ -1003,15 +983,9 @@ def _device_fail(
     *,
     gsv: GSV86CAN,
     results: list[dict],
-    dev_no: int,
+    plan: DevicePlan,
     sn: int | None,
     err: Exception,
-    cmd_old: int,
-    ans_old: int,
-    cmd_new: int,
-    ans_new: int,
-    baud_old: int,
-    baud_new: int,
     where: str,
 ) -> str:
     """
@@ -1021,32 +995,36 @@ def _device_fail(
     - results append
     - returns disconnect_reason
     """
-    print(f"[DEV {dev_no}] FEHLER ({where}): {err}")
+    safe_plan = plan.with_safe_new_ids()
+    print(f"[DEV {safe_plan.dev_no}] FEHLER ({where}): {err}")
 
     state = "unknown"
     try:
         state = _probe_state_after_fail(
-            gsv, dev_no,
-            cmd_old, ans_old,
-            cmd_new, ans_new,
-            baud_old=baud_old,
-            baud_new=baud_new,
+            gsv,
+            safe_plan.dev_no,
+            safe_plan.cmd_old,
+            safe_plan.ans_old,
+            safe_plan.cmd_new,
+            safe_plan.ans_new,
+            baud_old=safe_plan.baud_old,
+            baud_new=safe_plan.baud_new,
         )
     except Exception as e2:
-        print(f"[DEV {dev_no}] WARN: state-probe failed: {e2}")
+        print(f"[DEV {safe_plan.dev_no}] WARN: state-probe failed: {e2}")
 
     _record_result(
         results=results,
-        dev_no=dev_no,
+        dev_no=safe_plan.dev_no,
         sn=sn,
         ok=False,
         state=state,
-        cmd_old=cmd_old,
-        ans_old=ans_old,
-        cmd_new=cmd_new,
-        ans_new=ans_new,
-        baud_old=baud_old,
-        baud_new=baud_new,
+        cmd_old=safe_plan.cmd_old,
+        ans_old=safe_plan.ans_old,
+        cmd_new=safe_plan.cmd_new,
+        ans_new=safe_plan.ans_new,
+        baud_old=safe_plan.baud_old,
+        baud_new=safe_plan.baud_new,
         warn_unknown=True,
         warn_where=f"{where}/state-probe",
     )
@@ -1171,8 +1149,6 @@ def main() -> int:
                 already_recorded = False
                 aborted = False
                 disconnect_reason = "Weiter mit nächstem Gerät."
-                cmd_new = None
-                ans_new = None
                 needs_sn_but_missing = False
 
                 if SN_MODE:
@@ -1187,14 +1163,14 @@ def main() -> int:
                         baud_new=CANBAUD,
                     )
                 else:
-                    cmd_new, ans_new = _new_ids_for(dev_no)
+                    target_cmd, target_ans = _new_ids_for(dev_no)
                     plan = DevicePlan(
                         dev_no=dev_no,
                         cmd_old=DEFAULT_CMD_ID,
                         ans_old=DEFAULT_ANS_ID,
                         baud_old=DEFAULT_CANBAUD,
-                        cmd_new=cmd_new,
-                        ans_new=ans_new,
+                        cmd_new=target_cmd,
+                        ans_new=target_ans,
                         baud_new=CANBAUD,
                     )
 
@@ -1210,16 +1186,10 @@ def main() -> int:
                     _connect_one(dev_no)
 
 
-                    ok, sn, already_recorded, skip_programming, disconnect_reason = _activate_or_record_failure(
+                    _, sn, already_recorded, skip_programming, disconnect_reason = _activate_or_record_failure(
                         gsv=gsv,
                         results=results,
-                        dev_no=plan.dev_no,
-                        cmd_old=plan.cmd_old,
-                        ans_old=plan.ans_old,
-                        baud_old=plan.baud_old,
-                        cmd_new=plan.cmd_new,
-                        ans_new=plan.ans_new,
-                        baud_new=plan.baud_new,
+                        plan=plan,
                         tries=5,
                         delay=0.3,
                         read_sn=True,
@@ -1231,21 +1201,13 @@ def main() -> int:
                     
 
                     if not skip_programming:
-                        already_recorded, skip_programming, disconnect_reason, cmd_new, ans_new = _resolve_target_ids_after_activate(
+                        plan, already_recorded, skip_programming, disconnect_reason = _resolve_target_ids_after_activate(
                             results=results,
-                            dev_no=plan.dev_no,
+                            plan=plan,
                             sn=sn,
-                            cmd_old=plan.cmd_old,
-                            ans_old=plan.ans_old,
-                            baud_old=plan.baud_old,
-                            baud_new=plan.baud_new,
-                            cmd_new=plan.cmd_new,
-                            ans_new=plan.ans_new,
                             fail_state="old",
                             fail_message="FEHLER: Ziel-IDs konnten nicht bestimmt werden. Dieses Gerät wird übersprungen.",
                         )
-                        if not skip_programming:
-                            plan = plan.with_new_ids(cmd_new, ans_new)
 
                     if not skip_programming:
                         # optional: verify start
@@ -1257,14 +1219,8 @@ def main() -> int:
                     if not skip_programming:
                         already_recorded, skip_programming, disconnect_reason = _handle_skip_if_same_endpoint(
                             results=results,
-                            dev_no=plan.dev_no,
+                            plan=plan,
                             sn=sn,
-                            cmd_old=plan.cmd_old,
-                            ans_old=plan.ans_old,
-                            baud_old=plan.baud_old,
-                            cmd_new=plan.cmd_new,
-                            ans_new=plan.ans_new,
-                            baud_new=plan.baud_new,
                             state_on_skip="old",
                             print_message="Ziel-IDs sind DEFAULT. Skip umstellen.",
                             disconnect_message="OK (skip). Bitte Gerät abnehmen.",
@@ -1275,14 +1231,8 @@ def main() -> int:
                         sn, already_recorded, skip_programming, disconnect_reason = _apply_target_or_record_result(
                             gsv=gsv,
                             results=results,
-                            dev_no=plan.dev_no,
+                            plan=plan,
                             sn=sn,
-                            cmd_old=plan.cmd_old,
-                            ans_old=plan.ans_old,
-                            baud_old=plan.baud_old,
-                            cmd_new=plan.cmd_new,
-                            ans_new=plan.ans_new,
-                            baud_new=plan.baud_new,
                             success_message="✅ OK: Gerät wurde auf die neuen IDs umgestellt. Bitte abnehmen.",
                             failure_message="FEHLER: Umstellung fehlgeschlagen (state={state}). Bitte abnehmen.",
                         )
@@ -1291,35 +1241,19 @@ def main() -> int:
                     aborted, already_recorded, disconnect_reason = _handle_keyboard_interrupt(
                         gsv=gsv,
                         results=results,
-                        dev_no=plan.dev_no,
+                        plan=plan,
                         sn=sn,
                         already_recorded=already_recorded,
-                        cmd_old=plan.cmd_old,
-                        ans_old=plan.ans_old,
-                        cmd_new=plan.cmd_new if plan.cmd_new is not None else plan.cmd_old,
-                        ans_new=plan.ans_new if plan.ans_new is not None else plan.ans_old,
-                        baud_old=plan.baud_old,
-                        baud_new=plan.baud_new,
                     )
 
                 except Exception as e:
-                    fail_cmd_new = plan.cmd_new if plan.cmd_new is not None else plan.cmd_old
-                    fail_ans_new = plan.ans_new if plan.ans_new is not None else plan.ans_old
-
-                    plan = plan.with_new_ids(fail_cmd_new,fail_ans_new)
                     if not already_recorded:
                         disconnect_reason = _device_fail(
                             gsv=gsv,
                             results=results,
-                            dev_no=plan.dev_no,
+                            plan=plan,
                             sn=sn,
                             err=e,
-                            cmd_old=plan.cmd_old,
-                            ans_old=plan.ans_old,
-                            cmd_new=plan.cmd_new,
-                            ans_new=plan.ans_new,
-                            baud_old=plan.baud_old,
-                            baud_new=plan.baud_new,
                             where="case2/wizard",
                         )
                     else:
@@ -1385,8 +1319,6 @@ def main() -> int:
 
                 start_baud = _current_canbaud_for(dev_no) or CANBAUD
 
-                cmd_new = int(DEFAULT_CMD_ID)
-                ans_new = int(DEFAULT_ANS_ID)
                 expected_sn = d.get("serial") if isinstance(d, dict) else None
 
                 sn = None
@@ -1410,16 +1342,10 @@ def main() -> int:
                 try:
                     _connect_one(dev_no)
 
-                    ok, sn, already_recorded, skip_programming, disconnect_reason = _activate_or_record_failure(
+                    _, sn, already_recorded, skip_programming, disconnect_reason = _activate_or_record_failure(
                         gsv=gsv,
                         results=results,
-                        dev_no=plan.dev_no,
-                        cmd_old=plan.cmd_old,
-                        ans_old=plan.ans_old,
-                        baud_old=plan.baud_old,
-                        cmd_new=plan.cmd_new,
-                        ans_new=plan.ans_new,
-                        baud_new=plan.baud_new,
+                        plan=plan,
                         tries=5,
                         delay=0.3,
                         read_sn=True,
@@ -1432,15 +1358,9 @@ def main() -> int:
                     if not skip_programming:
                         already_recorded, skip_programming, disconnect_reason = _validate_expected_serial(
                             results=results,
-                            dev_no=plan.dev_no,
+                            plan=plan,
                             expected_sn=expected_sn,
                             sn=sn,
-                            cmd_old=plan.cmd_old,
-                            ans_old=plan.ans_old,
-                            cmd_new=plan.cmd_new,
-                            ans_new=plan.ans_new,
-                            baud_old=plan.baud_old,
-                            baud_new=plan.baud_new,
                         )
    
                     if not skip_programming:
@@ -1454,14 +1374,8 @@ def main() -> int:
                     if not skip_programming:
                         already_recorded, skip_programming, disconnect_reason = _handle_skip_if_same_endpoint(
                             results=results,
-                            dev_no=plan.dev_no,
+                            plan=plan,
                             sn=sn,
-                            cmd_old=plan.cmd_old,
-                            ans_old=plan.ans_old,
-                            baud_old=plan.baud_old,
-                            cmd_new=plan.cmd_new,
-                            ans_new=plan.ans_new,
-                            baud_new=plan.baud_new,
                             state_on_skip="old",
                             print_message="current.ids ist bereits DEFAULT und activation OK. Skip reset.",
                             disconnect_message="OK (skip). Gerät ist bereits DEFAULT. Bitte Gerät abnehmen.",
@@ -1472,14 +1386,8 @@ def main() -> int:
                         sn, already_recorded, skip_programming, disconnect_reason = _apply_target_or_record_result(
                             gsv=gsv,
                             results=results,
-                            dev_no=plan.dev_no,
+                            plan=plan,
                             sn=sn,
-                            cmd_old=plan.cmd_old,
-                            ans_old=plan.ans_old,
-                            baud_old=plan.baud_old,
-                            cmd_new=plan.cmd_new,
-                            ans_new=plan.ans_new,
-                            baud_new=plan.baud_new,
                             success_message="✅ OK: Gerät ist jetzt DEFAULT. Bitte abnehmen.",
                             failure_message="FEHLER: Reset auf DEFAULT fehlgeschlagen (state={state}). Bitte abnehmen.",
                         )
@@ -1488,15 +1396,9 @@ def main() -> int:
                     aborted, already_recorded, disconnect_reason = _handle_keyboard_interrupt(
                         gsv=gsv,
                         results=results,
-                        dev_no=plan.dev_no,
+                        plan=plan,
                         sn=sn,
                         already_recorded=already_recorded,
-                        cmd_old=plan.cmd_old,
-                        ans_old=plan.ans_old,
-                        cmd_new=plan.cmd_new,
-                        ans_new=plan.ans_new,
-                        baud_old=plan.baud_old,
-                        baud_new=plan.baud_new,
                     )
 
                 except Exception as e:
@@ -1506,15 +1408,9 @@ def main() -> int:
                         disconnect_reason = _device_fail(
                             gsv=gsv,
                             results=results,
-                            dev_no=plan.dev_no,
+                            plan=plan,
                             sn=sn,
                             err=e,
-                            cmd_old=plan.cmd_old,
-                            ans_old=plan.ans_old,
-                            cmd_new=plan.cmd_new,
-                            ans_new=plan.ans_new,
-                            baud_old=plan.baud_old,
-                            baud_new=plan.baud_new,
                             where="case3/reset-to-default",
                         )
                     else:
@@ -1587,8 +1483,6 @@ def main() -> int:
                 start_baud = _current_canbaud_for(dev_no) or CANBAUD
                 
                 sn = None
-                cmd_new = None
-                ans_new = None
                 expected_sn = d.get("serial") if isinstance(d, dict) else None
                 needs_sn_but_missing = False
 
@@ -1611,14 +1505,14 @@ def main() -> int:
                         baud_new=CANBAUD,
                     )
                 else:
-                    cmd_new, ans_new = _new_ids_for(dev_no)
+                    target_cmd, target_ans = _new_ids_for(dev_no)
                     plan = DevicePlan(
                         dev_no=dev_no,
                         cmd_old=cmd_id,
                         ans_old=ans_id,
                         baud_old=start_baud,
-                        cmd_new=cmd_new,
-                        ans_new=ans_new,
+                        cmd_new=target_cmd,
+                        ans_new=target_ans,
                         baud_new=CANBAUD,
                     )
 
@@ -1627,16 +1521,10 @@ def main() -> int:
 
 
                     
-                    ok, sn, already_recorded, skip_programming, disconnect_reason = _activate_or_record_failure(
+                    _, sn, already_recorded, skip_programming, disconnect_reason = _activate_or_record_failure(
                         gsv=gsv,
                         results=results,
-                        dev_no=plan.dev_no,
-                        cmd_old=plan.cmd_old,
-                        ans_old=plan.ans_old,
-                        baud_old=plan.baud_old,
-                        cmd_new=plan.cmd_new,
-                        ans_new=plan.ans_new,
-                        baud_new=plan.baud_new,
+                        plan=plan,
                         tries=5,
                         delay=0.3,
                         read_sn=True,
@@ -1648,36 +1536,22 @@ def main() -> int:
                     
 
                     if not skip_programming:
-                        already_recorded, skip_programming, disconnect_reason, cmd_new, ans_new = _resolve_target_ids_after_activate(
+                        plan, already_recorded, skip_programming, disconnect_reason = _resolve_target_ids_after_activate(
                             results=results,
-                            dev_no=plan.dev_no,
+                            plan=plan,
                             sn=sn,
-                            cmd_old=plan.cmd_old,
-                            ans_old=plan.ans_old,
-                            baud_old=plan.baud_old,
-                            baud_new=plan.baud_new,
-                            cmd_new=plan.cmd_new,
-                            ans_new=plan.ans_new,
                             fail_state="old",
                             fail_message="FEHLER: Ziel-IDs konnten nicht bestimmt werden. Dieses Gerät wird übersprungen.",
                         )
-                        if not skip_programming:
-                            plan = plan.with_new_ids(cmd_new, ans_new)
  
                     
 
                     if not skip_programming:
                         already_recorded, skip_programming, disconnect_reason = _validate_expected_serial(
                             results=results,
-                            dev_no=plan.dev_no,
+                            plan=plan,
                             expected_sn=expected_sn,
                             sn=sn,
-                            cmd_old=plan.cmd_old,
-                            ans_old=plan.ans_old,
-                            cmd_new=plan.cmd_new,
-                            ans_new=plan.ans_new,
-                            baud_old=plan.baud_old,
-                            baud_new=plan.baud_new,
                         )
 
                                 
@@ -1691,14 +1565,8 @@ def main() -> int:
                     if not skip_programming:
                         already_recorded, skip_programming, disconnect_reason = _handle_skip_if_same_endpoint(
                             results=results,
-                            dev_no=plan.dev_no,
+                            plan=plan,
                             sn=sn,
-                            cmd_old=plan.cmd_old,
-                            ans_old=plan.ans_old,
-                            baud_old=plan.baud_old,
-                            cmd_new=plan.cmd_new,
-                            ans_new=plan.ans_new,
-                            baud_new=plan.baud_new,
                             state_on_skip="new",
                             print_message="Ziel-IDs == aktuelle YAML-IDs. Skip reprogram/reset.",
                             disconnect_message="OK (skip). Bitte Gerät abnehmen.",
@@ -1708,14 +1576,8 @@ def main() -> int:
                         sn, already_recorded, skip_programming, disconnect_reason = _apply_target_or_record_result(
                             gsv=gsv,
                             results=results,
-                            dev_no=plan.dev_no,
+                            plan=plan,
                             sn=sn,
-                            cmd_old=plan.cmd_old,
-                            ans_old=plan.ans_old,
-                            baud_old=plan.baud_old,
-                            cmd_new=plan.cmd_new,
-                            ans_new=plan.ans_new,
-                            baud_new=plan.baud_new,
                             success_message="✅ OK: Gerät wurde auf die neuen IDs umgestellt. Bitte abnehmen.",
                             failure_message="FEHLER: Reset auf DEFAULT fehlgeschlagen (state={state}). Bitte abnehmen.",
                         )
@@ -1724,36 +1586,19 @@ def main() -> int:
                     aborted, already_recorded, disconnect_reason = _handle_keyboard_interrupt(
                         gsv=gsv,
                         results=results,
-                        dev_no=plan.dev_no,
+                        plan=plan,
                         sn=sn,
                         already_recorded=already_recorded,
-                        cmd_old=plan.cmd_old,
-                        ans_old=plan.ans_old,
-                        cmd_new=plan.cmd_new if plan.cmd_new is not None else plan.cmd_old,
-                        ans_new=plan.ans_new if plan.ans_new is not None else plan.ans_old,
-                        baud_old=plan.baud_old,
-                        baud_new=plan.baud_new,
                     )
                     
                 except Exception as e:
-                    # old=current IDs @ CANBAUD, new=target IDs @ CANBAUD (keine baud-änderung!)
-                    fail_cmd_new = plan.cmd_new if plan.cmd_new is not None else plan.cmd_old
-                    fail_ans_new = plan.ans_new if plan.ans_new is not None else plan.ans_old
-                    
-                    plan = plan.with_new_ids(fail_cmd_new, fail_ans_new)
                     if not already_recorded:
                         disconnect_reason = _device_fail(
                             gsv=gsv,
                             results=results,
-                            dev_no=plan.dev_no,
+                            plan=plan,
                             sn=sn,
                             err=e,
-                            cmd_old=plan.cmd_old,
-                            ans_old=plan.ans_old,
-                            cmd_new=plan.cmd_new,
-                            ans_new=plan.ans_new,
-                            baud_old=plan.baud_old,
-                            baud_new=plan.baud_new,
                             where="case1/reprogram",
                         )
                     else:
