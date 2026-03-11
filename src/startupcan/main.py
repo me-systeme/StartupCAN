@@ -22,6 +22,16 @@ from ruamel.yaml import YAML
 from dataclasses import dataclass
 
 @dataclass(frozen=True)
+class RunConfig:
+    intro_lines: list[str]
+    continue_prompt: str
+    base_current_ids: list[dict]
+    success_message: str
+    warning_message: str
+    resolve_target_after_activate: bool
+    validate_expected_serial: bool
+
+@dataclass(frozen=True)
 class DevicePlan:
     dev_no: int
     cmd_old: int
@@ -67,7 +77,6 @@ from startupcan.config import (
     DEFAULT_CMD_ID,
     DEFAULT_ANS_ID,
     CONFIG_PATH,
-    IGNORE_NEW_SERIALS,
 )
 from startupcan.gsv86can import (
     GSV86CAN,
@@ -142,6 +151,122 @@ def _warn_unknown(dev_no: int, serial: int | None, *, where: str = ""):
 
 def _same_endpoint(cmd_a: int, ans_a: int, cmd_b: int, ans_b: int, baud_a: int, baud_b: int) -> bool:
     return int(cmd_a) == int(cmd_b) and int(ans_a) == int(ans_b) and int(baud_a) == int(baud_b)
+
+def _build_run_config() -> RunConfig:
+    if CURRENT_DEFAULT_MODE:
+        return RunConfig(
+            intro_lines=[
+                "",
+                "WICHTIG:",
+                f"- Default IDs: CMD={fmt_can_id(DEFAULT_CMD_ID)} ANS={fmt_can_id(DEFAULT_ANS_ID)}",
+                "- Schließe IMMER nur EINEN Messverstärker gleichzeitig an (sonst CAN-Kollisionen).",
+                "- Ziel-IDs werden aus devices.config.new.ids übernommen.",
+            ],
+            continue_prompt="[WIZARD] Nächstes Gerät umstellen? [j/N]: ",
+            base_current_ids=_baseline_current_for_case2_with_baud(),
+            success_message="[INFO] Alle Geräte umgestellt ⇒ dürfen jetzt gleichzeitig an den Bus (IDs eindeutig).",
+            warning_message=(
+                "[WARN] Nicht alle Geräte umgestellt. Erst config.updated.yaml prüfen, "
+                "bevor alle gleichzeitig an den Bus kommen. "
+                "(Keine doppelten CAN IDs und keine unknown:true Einträge.)"
+            ),
+            resolve_target_after_activate=True,
+            validate_expected_serial=False,
+        )
+
+    if NEW_DEFAULT_MODE:
+        return RunConfig(
+            intro_lines=[
+                "",
+                "[INFO] Forced-Reset Wizard: current.default=false & new.default=true",
+                "[INFO] Wir stellen jetzt JEWEILS EIN Gerät auf DEFAULT und nehmen es danach ab.",
+            ],
+            continue_prompt="[WIZARD] Nächstes Gerät auf DEFAULT setzen? [j/N]: ",
+            base_current_ids=DEVICE_CONFIG or [],
+            success_message=(
+                "⚠️  HINWEIS: Alle Geräte sind jetzt auf DEFAULT IDs.\n"
+                "   => NICHT gleichzeitig am Bus betreiben/aktivieren."
+            ),
+            warning_message=(
+                "[WARN] Nicht alle Geräte wurden erfolgreich auf DEFAULT gesetzt. "
+                "Prüfe zuerst config.updated.yaml. "
+                "Bus-Betrieb nur mit den dort eingetragenen IDs."
+            ),
+            resolve_target_after_activate=False,
+            validate_expected_serial=True,
+        )
+
+    return RunConfig(
+        intro_lines=[
+            "[INFO] new.default=false: Ziel-IDs aus devices.config.new.ids.",
+        ],
+        continue_prompt="[WIZARD] Nächstes Gerät bearbeiten? [j/N]: ",
+        base_current_ids=DEVICE_CONFIG or [],
+        success_message="\n[INFO] new.default=false: Geräte dürfen gleichzeitig am Bus sein (IDs eindeutig).",
+        warning_message=(
+            "[WARN] Nicht alle Devices erfolgreich. YAML enthält Ist-Stand (teils alte IDs). "
+            "Prüfe zunächst die YAML bevor alle Geräte gleichzeitig am Bus angeschlossen werden. "
+            "(Keine doppelten CAN IDs oder unknown: true!)"
+        ),
+        resolve_target_after_activate=True,
+        validate_expected_serial=True,
+    )
+
+
+def _build_device_plan(d: dict) -> tuple[DevicePlan, int | None]:
+    dev_no = int(d["dev_no"])
+    expected_sn = d.get("serial") if isinstance(d, dict) else None
+
+    if CURRENT_DEFAULT_MODE:
+        cmd_old = DEFAULT_CMD_ID
+        ans_old = DEFAULT_ANS_ID
+        baud_old = DEFAULT_CANBAUD
+    else:
+        cmd_old = int(d["cmd_id"])
+        ans_old = int(d["answer_id"])
+        baud_old = _current_canbaud_for(dev_no) or CANBAUD
+
+    if NEW_DEFAULT_MODE and not CURRENT_DEFAULT_MODE:
+        return (
+            DevicePlan(
+                dev_no=dev_no,
+                cmd_old=cmd_old,
+                ans_old=ans_old,
+                baud_old=baud_old,
+                cmd_new=DEFAULT_CMD_ID,
+                ans_new=DEFAULT_ANS_ID,
+                baud_new=DEFAULT_CANBAUD,
+            ),
+            expected_sn,
+        )
+
+    if SN_MODE:
+        return (
+            DevicePlan(
+                dev_no=dev_no,
+                cmd_old=cmd_old,
+                ans_old=ans_old,
+                baud_old=baud_old,
+                cmd_new=None,
+                ans_new=None,
+                baud_new=CANBAUD,
+            ),
+            expected_sn,
+        )
+
+    target_cmd, target_ans = _new_ids_for(dev_no)
+    return (
+        DevicePlan(
+            dev_no=dev_no,
+            cmd_old=cmd_old,
+            ans_old=ans_old,
+            baud_old=baud_old,
+            cmd_new=target_cmd,
+            ans_new=target_ans,
+            baud_new=CANBAUD,
+        ),
+        expected_sn,
+    )
 
 def _connect_one(dev_no: int):
     print("\n" + "=" * 80)
@@ -672,7 +797,6 @@ def _activate_or_record_failure(
     tries: int = 5,
     delay: float = 0.3,
     read_sn: bool = True,
-    sn_mode_requires_known_target: bool = False,
     warn_where: str = "state-probe",
     fail_message: str = "Activation failed.",
 ) -> tuple[bool, int | None, bool, bool, str]:
@@ -713,7 +837,7 @@ def _activate_or_record_failure(
         )
 
     # activate fehlgeschlagen
-    if sn_mode_requires_known_target or plan.cmd_new is None or plan.ans_new is None:
+    if plan.cmd_new is None or plan.ans_new is None:
         state = "unknown"
         fail_plan = plan.with_safe_new_ids()
     else:
@@ -1040,7 +1164,6 @@ def _run_device_step(
     expected_sn: int | None,
     resolve_target_after_activate: bool,
     validate_expected_serial: bool,
-    sn_mode_requires_known_target: bool,
 ) -> tuple[DevicePlan, int | None, bool]:
 
     sn = None
@@ -1059,7 +1182,6 @@ def _run_device_step(
             tries=5,
             delay=0.3,
             read_sn=True,
-            sn_mode_requires_known_target=sn_mode_requires_known_target,
             warn_where="activation",
             fail_message="Activation failed.",
         )
@@ -1259,7 +1381,6 @@ def main() -> int:
                 _warn_unknown(dev_no, int(serial) if serial is not None else None, where="yaml-current.ids")
             print("!" * 80 + "\n")
 
-        wizard_mode = bool(CURRENT_DEFAULT_MODE)
         forced_reset_wizard = (not CURRENT_DEFAULT_MODE) and bool(NEW_DEFAULT_MODE)
 
         if forced_reset_wizard:
@@ -1276,189 +1397,40 @@ def main() -> int:
             print("   weil mehrere Geräte dieselbe CAN-ID hätten (Kollision / Bus-Off möglich).")
             print("   => Geräte nur EINZELN anschließen und aktivieren.\n")
 
-        # -------------------------------------------------------------------
-        # Case 2 CURRENT_DEFAULT_MODE = true -> Wizard (one device at a time) 
-        # -------------------------------------------------------------------
-        if wizard_mode:
-            print("\nWICHTIG:")
-            print(f"- Default IDs: CMD={fmt_can_id(DEFAULT_CMD_ID)} ANS={fmt_can_id(DEFAULT_ANS_ID)}")
-            print("- Schließe IMMER nur EINEN Messverstärker gleichzeitig an (sonst CAN-Kollisionen).")
-            print("- Ziel-IDs werden aus devices.config.new.ids übernommen.")
+        run_cfg = _build_run_config()
 
-            for d in DEVICE_CONFIG:
-                dev_no = int(d["dev_no"])
+        for line in run_cfg.intro_lines:
+            print(line)
 
-                needs_sn_but_missing = False
+        for d in DEVICE_CONFIG:
 
-                if SN_MODE:
-                    needs_sn_but_missing = True
-                    plan = DevicePlan(
-                        dev_no=dev_no,
-                        cmd_old=DEFAULT_CMD_ID,
-                        ans_old=DEFAULT_ANS_ID,
-                        baud_old=DEFAULT_CANBAUD,
-                        cmd_new=None,
-                        ans_new=None,
-                        baud_new=CANBAUD,
-                    )
-                else:
-                    target_cmd, target_ans = _new_ids_for(dev_no)
-                    plan = DevicePlan(
-                        dev_no=dev_no,
-                        cmd_old=DEFAULT_CMD_ID,
-                        ans_old=DEFAULT_ANS_ID,
-                        baud_old=DEFAULT_CANBAUD,
-                        cmd_new=target_cmd,
-                        ans_new=target_ans,
-                        baud_new=CANBAUD,
-                    )
+            plan, expected_sn = _build_device_plan(d)
 
-                _, _, _ = _run_device_step(
+            _, _, _ = _run_device_step(
                     gsv=gsv,
                     results=results,
                     plan=plan,
-                    expected_sn=None,
-                    resolve_target_after_activate=True,
-                    validate_expected_serial=False,
-                    sn_mode_requires_known_target=needs_sn_but_missing,
+                    expected_sn=expected_sn if run_cfg.validate_expected_serial else None,
+                    resolve_target_after_activate=run_cfg.resolve_target_after_activate,
+                    validate_expected_serial=run_cfg.validate_expected_serial,
                 )
-
-                if not _ask_continue("[WIZARD] Nächstes Gerät umstellen? [j/N]: "):
-                    break
-
-            return _finalize_run_and_write_yaml(
-                results=results,
-                base_current_ids=_baseline_current_for_case2_with_baud(),
-                current_default=_all_fail(results, len(DEVICE_CONFIG)),
-                success_message="[INFO] Alle Geräte umgestellt ⇒ dürfen jetzt gleichzeitig an den Bus (IDs eindeutig).",
-                warning_message=(
-                    "[WARN] Nicht alle Geräte umgestellt. Erst config.updated.yaml prüfen, "
-                    "bevor alle gleichzeitig an den Bus kommen. "
-                    "(Keine doppelten CAN IDs und keine unknown:true Einträge.)"
-                ),
-            )
-
-        # Case 3
-        elif forced_reset_wizard:
-            print("\n[INFO] Forced-Reset Wizard: current.default=false & new.default=true")
-            print("[INFO] Wir stellen jetzt JEWEILS EIN Gerät auf DEFAULT und nehmen es danach ab.\n")
-
-            for d in DEVICE_CONFIG:
-                dev_no = int(d["dev_no"])
-                cmd_start = int(d["cmd_id"])
-                ans_start = int(d["answer_id"])
-
-                start_baud = _current_canbaud_for(dev_no) or CANBAUD
-
-                expected_sn = d.get("serial") if isinstance(d, dict) else None
-
-                plan = DevicePlan(
-                        dev_no=dev_no,
-                        cmd_old=cmd_start,
-                        ans_old=ans_start,
-                        baud_old=start_baud,
-                        cmd_new=DEFAULT_CMD_ID,
-                        ans_new=DEFAULT_ANS_ID,
-                        baud_new=DEFAULT_CANBAUD,
-                    )
-                
-                _, _, _ = _run_device_step(
-                    gsv=gsv,
-                    results=results,
-                    plan=plan,
-                    expected_sn=expected_sn,
-                    resolve_target_after_activate=False,
-                    validate_expected_serial=True,
-                    sn_mode_requires_known_target=False,
-                )
-
-                if not _ask_continue("[WIZARD] Nächstes Gerät auf DEFAULT setzen? [j/N]: "):
-                    break
-
-
-            return _finalize_run_and_write_yaml(
-                results=results,
-                base_current_ids=DEVICE_CONFIG or [],
-                current_default=_all_ok(results, len(DEVICE_CONFIG)),
-                success_message=(
-                    "⚠️  HINWEIS: Alle Geräte sind jetzt auf DEFAULT IDs.\n"
-                    "   => NICHT gleichzeitig am Bus betreiben/aktivieren."
-                ),
-                warning_message=(
-                    "[WARN] Nicht alle Geräte wurden erfolgreich auf DEFAULT gesetzt. "
-                    "Prüfe zuerst config.updated.yaml. "
-                    "Bus-Betrieb nur mit den dort eingetragenen IDs."
-                ),
-            )
-
-        # -------------------------------------------------------------------
-        # Case 1: CURRENT_DEFAULT_MODE = false -> All devices can be connected
-        # -------------------------------------------------------------------
+            
+            if not _ask_continue(run_cfg.continue_prompt):
+                break
+        
+        if CURRENT_DEFAULT_MODE:
+            current_default = _all_fail(results, len(DEVICE_CONFIG))
+        elif NEW_DEFAULT_MODE:
+            current_default = _all_ok(results, len(DEVICE_CONFIG))
         else:
-            print("[INFO] new.default=false: Ziel-IDs aus devices.config.new.ids.\n")
-            if IGNORE_NEW_SERIALS:
-                print("[HINWEIS] devices.config.new.ids enthält 'serial' Einträge, "
-                    "aber in Case 1 wird IMMER per dev_no gemappt. "
-                    "Die Seriennummern in new.ids werden ignoriert.")
-
-            for d in DEVICE_CONFIG:
-                dev_no = int(d["dev_no"])
-                cmd_id = int(d["cmd_id"])
-                ans_id = int(d["answer_id"])
-
-                start_baud = _current_canbaud_for(dev_no) or CANBAUD
-                expected_sn = d.get("serial") if isinstance(d, dict) else None
-                needs_sn_but_missing = False
-
-                if SN_MODE:
-                    # Ziel kann erst bestimmt werden, wenn SN gelesen wurde
-                    needs_sn_but_missing = True
-                    plan = DevicePlan(
-                        dev_no=dev_no,
-                        cmd_old=cmd_id,
-                        ans_old=ans_id,
-                        baud_old=start_baud,
-                        cmd_new=None,
-                        ans_new=None,
-                        baud_new=CANBAUD,
-                    )
-                else:
-                    target_cmd, target_ans = _new_ids_for(dev_no)
-                    plan = DevicePlan(
-                        dev_no=dev_no,
-                        cmd_old=cmd_id,
-                        ans_old=ans_id,
-                        baud_old=start_baud,
-                        cmd_new=target_cmd,
-                        ans_new=target_ans,
-                        baud_new=CANBAUD,
-                    )
-
-                _, _, _ = _run_device_step(
-                    gsv=gsv,
-                    results=results,
-                    plan=plan,
-                    expected_sn=expected_sn,
-                    resolve_target_after_activate=True,
-                    validate_expected_serial=True,
-                    sn_mode_requires_known_target=needs_sn_but_missing,
-                )
-                
-                if not _ask_continue("[WIZARD] Nächstes Gerät bearbeiten? [j/N]: "):
-                    break
-
-
-            return _finalize_run_and_write_yaml(
-                results=results,
-                base_current_ids=DEVICE_CONFIG or [],
-                current_default=False,
-                success_message="\n[INFO] new.default=false: Geräte dürfen gleichzeitig am Bus sein (IDs eindeutig).",
-                warning_message=(
-                    "[WARN] Nicht alle Devices erfolgreich. YAML enthält Ist-Stand (teils alte IDs). "
-                    "Prüfe zunächst die YAML bevor alle Geräte gleichzeitig am Bus angeschlossen werden. "
-                    "(Keine doppelten CAN IDs oder unknown: true!)"
-                ),
-            )
+            current_default = False
+        return _finalize_run_and_write_yaml(
+            results=results,
+            base_current_ids=run_cfg.base_current_ids,
+            current_default=current_default,
+            success_message=run_cfg.success_message,
+            warning_message=run_cfg.warning_message,
+        )
 
     finally:
         for dev_no, active in list(HANDLE_ACTIVE.items()):

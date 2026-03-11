@@ -92,7 +92,6 @@ def load_config(path: Path) -> dict:
     """
 
     SN_MODE = False
-    IGNORE_NEW_SERIALS = False
     # -------------------------------------------------------------------------
     # Read YAML file
     # -------------------------------------------------------------------------
@@ -357,7 +356,6 @@ def load_config(path: Path) -> dict:
             )
         
         
-        IGNORE_NEW_SERIALS = False
 
         SN_MODE = _detect_and_validate_sn_mode(device_new_raw)
         # if SN_MODE:
@@ -423,7 +421,6 @@ def load_config(path: Path) -> dict:
         "DEVICE_CURRENT": device_current,   # optional
         "DEVICE_NEW": device_new,           # Ziel-IDs
         "ASSIGN": {"DEFAULT_CMD_ID": default_cmd_id, "DEFAULT_ANS_ID": default_ans_id, "DEFAULT_CANBAUD": default_canbaud,},
-        "IGNORE_NEW_SERIALS": bool(IGNORE_NEW_SERIALS),
     }
 
     
@@ -472,4 +469,3 @@ ASSIGN = CONFIG["ASSIGN"]
 DEFAULT_CMD_ID = ASSIGN["DEFAULT_CMD_ID"]
 DEFAULT_ANS_ID = ASSIGN["DEFAULT_ANS_ID"]
 DEFAULT_CANBAUD = ASSIGN["DEFAULT_CANBAUD"]
-IGNORE_NEW_SERIALS = CONFIG["IGNORE_NEW_SERIALS"]
