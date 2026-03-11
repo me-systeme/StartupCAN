@@ -1192,6 +1192,41 @@ def _write_updated_yaml(
     with open(dst_path, "w", encoding="utf-8") as f:
         y.dump(cfg, f)
 
+def _finalize_run_and_write_yaml(
+    *,
+    results: list[dict],
+    base_current_ids: list[dict],
+    current_default: bool,
+    success_message: str,
+    warning_message: str,
+) -> int:
+    _print_summary(results)
+
+    updated_subset = _effective_current_ids_from_results(results)
+    current_ids = _merge_current_ids(base_current_ids, updated_subset)
+
+    all_ok = _all_ok(results, len(DEVICE_CONFIG))
+
+    dst = Path(CONFIG_PATH).with_name("config.updated.yaml")
+
+    _write_updated_yaml(
+        src_path=Path(CONFIG_PATH),
+        dst_path=dst,
+        current_default=current_default,
+        current_ids=current_ids,
+        make_new_safe=all_ok,
+        drop_canbaud=all_ok,
+    )
+
+    print(f"[INFO] ✅ Updated YAML geschrieben: {dst}")
+
+    if all_ok:
+        print(success_message)
+    else:
+        print(warning_message)
+
+    return 0
+
 def main() -> int:
     gsv = GSV86CAN()
     results = []
@@ -1278,7 +1313,7 @@ def main() -> int:
                         baud_new=CANBAUD,
                     )
 
-                plan, sn, aborted = _run_device_step(
+                _, _, _ = _run_device_step(
                     gsv=gsv,
                     results=results,
                     plan=plan,
@@ -1291,37 +1326,17 @@ def main() -> int:
                 if not _ask_continue("[WIZARD] Nächstes Gerät umstellen? [j/N]: "):
                     break
 
-            _print_summary(results)
-            updated_subset = _effective_current_ids_from_results(results)
-
-            baseline_current = _baseline_current_for_case2_with_baud()
-            current_ids = _merge_current_ids(baseline_current, updated_subset)
-
-            # current_default bleibt wie gehabt (deine Logik)
-            current_default = _all_fail(results, len(DEVICE_CONFIG))
-
-            all_ok = _all_ok(results, len(DEVICE_CONFIG))
-            dst = Path(CONFIG_PATH).with_name("config.updated.yaml")
-            _write_updated_yaml(
-                src_path=Path(CONFIG_PATH),
-                dst_path=dst,
-                current_default=current_default,
-                current_ids=current_ids,
-                make_new_safe=all_ok,
-                drop_canbaud = all_ok
+            return _finalize_run_and_write_yaml(
+                results=results,
+                base_current_ids=_baseline_current_for_case2_with_baud(),
+                current_default=_all_fail(results, len(DEVICE_CONFIG)),
+                success_message="[INFO] Alle Geräte umgestellt ⇒ dürfen jetzt gleichzeitig an den Bus (IDs eindeutig).",
+                warning_message=(
+                    "[WARN] Nicht alle Geräte umgestellt. Erst config.updated.yaml prüfen, "
+                    "bevor alle gleichzeitig an den Bus kommen. "
+                    "(Keine doppelten CAN IDs und keine unknown:true Einträge.)"
+                ),
             )
-            print(f"[INFO] ✅ Updated YAML geschrieben: {dst}")
-
-            if _all_ok(results, len(DEVICE_CONFIG)):
-                print("[INFO] Alle Geräte umgestellt ⇒ dürfen jetzt gleichzeitig an den Bus (IDs eindeutig).")
-            else:
-                print("[INFO] Nach dem Run dürfen Geräte nur dann gleichzeitig an den Bus, wenn config.updated.yaml keine doppelten IDs enthält und keine unknown:true Einträge hat.")
-                print("[WARN] Nicht alle Geräte umgestellt ⇒ erst config.updated.yaml prüfen, bevor alle gleichzeitig an den Bus.")
-
-            if current_default:
-                print("[INFO] Kein Gerät wurde umgestellt: current.default bleibt TRUE (alle weiterhin DEFAULT).")
-            
-            return 0
 
         # Case 3
         elif forced_reset_wizard:
@@ -1347,7 +1362,7 @@ def main() -> int:
                         baud_new=DEFAULT_CANBAUD,
                     )
                 
-                plan, sn, aborted = _run_device_step(
+                _, _, _ = _run_device_step(
                     gsv=gsv,
                     results=results,
                     plan=plan,
@@ -1360,37 +1375,21 @@ def main() -> int:
                 if not _ask_continue("[WIZARD] Nächstes Gerät auf DEFAULT setzen? [j/N]: "):
                     break
 
-            _print_summary(results)
-            updated_subset = _effective_current_ids_from_results(results)
 
-            # In Case 3 ist DEVICE_CONFIG = YAML current.ids (bei dir so)
-            original_current = DEVICE_CONFIG or []
-
-            current_ids = _merge_current_ids(original_current, updated_subset)
-            current_default = _all_ok(results, len(DEVICE_CONFIG))  # nur wenn ALLE wirklich default sind
-
-            all_ok = _all_ok(results, len(DEVICE_CONFIG))
-            dst = Path(CONFIG_PATH).with_name("config.updated.yaml")
-            _write_updated_yaml(
-                src_path=Path(CONFIG_PATH),
-                dst_path=dst,
-                current_default=current_default,
-                current_ids=current_ids,
-                make_new_safe=all_ok,
-                drop_canbaud = all_ok
+            return _finalize_run_and_write_yaml(
+                results=results,
+                base_current_ids=DEVICE_CONFIG or [],
+                current_default=_all_ok(results, len(DEVICE_CONFIG)),
+                success_message=(
+                    "⚠️  HINWEIS: Alle Geräte sind jetzt auf DEFAULT IDs.\n"
+                    "   => NICHT gleichzeitig am Bus betreiben/aktivieren."
+                ),
+                warning_message=(
+                    "[WARN] Nicht alle Geräte wurden erfolgreich auf DEFAULT gesetzt. "
+                    "Prüfe zuerst config.updated.yaml. "
+                    "Bus-Betrieb nur mit den dort eingetragenen IDs."
+                ),
             )
-            print(f"[INFO] ✅ Updated YAML geschrieben: {dst}")
-
-            if not current_default:
-                print("[WARN] Nicht alle Geräte wurden auf DEFAULT gesetzt. current.default bleibt FALSE.")
-
-            if current_default:
-                print("⚠️  HINWEIS: Geräte sind jetzt auf DEFAULT IDs.")
-                print("   => NICHT gleichzeitig am Bus betreiben/aktivieren.")
-            else:
-                print("⚠️  HINWEIS: NICHT alle Geräte sind DEFAULT. (Gemischter Zustand möglich.)")
-                print("   => Bus-Betrieb nur mit den IDs aus config.updated.yaml!")
-            return 0
 
         # -------------------------------------------------------------------
         # Case 1: CURRENT_DEFAULT_MODE = false -> All devices can be connected
@@ -1435,7 +1434,7 @@ def main() -> int:
                         baud_new=CANBAUD,
                     )
 
-                plan, sn, aborted = _run_device_step(
+                _, _, _ = _run_device_step(
                     gsv=gsv,
                     results=results,
                     plan=plan,
@@ -1449,35 +1448,17 @@ def main() -> int:
                     break
 
 
-            _print_summary(results)
-
-            updated_subset = _effective_current_ids_from_results(results)
-
-            # In Case 1 ist DEVICE_CONFIG = YAML current.ids (bei dir so)
-            original_current = DEVICE_CONFIG or []
-
-            current_ids = _merge_current_ids(original_current, updated_subset)
-            current_default = False
-
-            all_ok = _all_ok(results, len(DEVICE_CONFIG))
-            dst = Path(CONFIG_PATH).with_name("config.updated.yaml")
-            _write_updated_yaml(
-                src_path=Path(CONFIG_PATH),
-                dst_path=dst,
-                current_default=current_default,
-                current_ids=current_ids,
-                make_new_safe=all_ok,
-                drop_canbaud = all_ok
+            return _finalize_run_and_write_yaml(
+                results=results,
+                base_current_ids=DEVICE_CONFIG or [],
+                current_default=False,
+                success_message="\n[INFO] new.default=false: Geräte dürfen gleichzeitig am Bus sein (IDs eindeutig).",
+                warning_message=(
+                    "[WARN] Nicht alle Devices erfolgreich. YAML enthält Ist-Stand (teils alte IDs). "
+                    "Prüfe zunächst die YAML bevor alle Geräte gleichzeitig am Bus angeschlossen werden. "
+                    "(Keine doppelten CAN IDs oder unknown: true!)"
+                ),
             )
-            print(f"[INFO] ✅ Updated YAML geschrieben: {dst}")
-            
-            if _all_ok(results, len(DEVICE_CONFIG)):
-                print("\n[INFO] new.default=false: Geräte dürfen gleichzeitig am Bus sein (IDs eindeutig).")
-            else:
-                print("[WARN] Nicht alle Devices erfolgreich. YAML enthält Ist-Stand (teils alte IDs). Prüfe zunächst die YAML bevor alle Geräte gleichzeitig am Bus angeschlossen werden. (Keine doppelten CAN IDs oder unknown: true!)")
-
-            
-            return 0 
 
     finally:
         for dev_no, active in list(HANDLE_ACTIVE.items()):
