@@ -1031,6 +1031,115 @@ def _device_fail(
 
     return f"FEHLER: {err} (state={state}). Bitte Gerät abnehmen."
 
+
+def _run_device_step(
+    *,
+    gsv: GSV86CAN,
+    results: list[dict],
+    plan: DevicePlan,
+    expected_sn: int | None,
+    resolve_target_after_activate: bool,
+    validate_expected_serial: bool,
+    sn_mode_requires_known_target: bool,
+) -> tuple[DevicePlan, int | None, bool]:
+
+    sn = None
+    already_recorded = False
+    skip_programming = False
+    aborted = False
+    disconnect_reason = "Weiter mit nächstem Gerät."
+
+    try:
+        _connect_one(plan.dev_no)
+
+        _, sn, already_recorded, skip_programming, disconnect_reason = _activate_or_record_failure(
+            gsv=gsv,
+            results=results,
+            plan=plan,
+            tries=5,
+            delay=0.3,
+            read_sn=True,
+            sn_mode_requires_known_target=sn_mode_requires_known_target,
+            warn_where="activation",
+            fail_message="Activation failed.",
+        )
+
+        if not skip_programming and resolve_target_after_activate:
+            plan, already_recorded, skip_programming, disconnect_reason = _resolve_target_ids_after_activate(
+                results=results,
+                plan=plan,
+                sn=sn,
+                fail_state="old",
+                fail_message="FEHLER: Ziel-IDs konnten nicht bestimmt werden. Dieses Gerät wird übersprungen.",
+            )
+
+        if not skip_programming and validate_expected_serial:
+            already_recorded, skip_programming, disconnect_reason = _validate_expected_serial(
+                results=results,
+                plan=plan,
+                expected_sn=expected_sn,
+                sn=sn,
+            )
+
+        if not skip_programming:
+            ok = _verify_ids(gsv, plan.dev_no, sn, plan.cmd_old, plan.ans_old, plan.baud_old)
+            if not ok:
+                print(f"[{_fmt_dev(plan.dev_no, sn)}] WARN: Start-IDs stimmen nicht (trotz activation).")
+
+        if not skip_programming:
+            already_recorded, skip_programming, disconnect_reason = _handle_skip_if_same_endpoint(
+                results=results,
+                plan=plan,
+                sn=sn,
+                state_on_skip="new",
+                print_message="Gerät hat bereits die Ziel-CAN-Settings.",
+                disconnect_message="OK (skip). Bitte Gerät abnehmen.",
+            )
+
+        if not skip_programming:
+            sn, already_recorded, skip_programming, disconnect_reason = _apply_target_or_record_result(
+                gsv=gsv,
+                results=results,
+                plan=plan,
+                sn=sn,
+                success_message="✅ OK: Gerät wurde auf die neuen CAN settings umgestellt. Bitte abnehmen.",
+                failure_message="FEHLER: Umstellung fehlgeschlagen (state={state}). Bitte abnehmen.",
+            )
+
+    except KeyboardInterrupt:
+        aborted, already_recorded, disconnect_reason = _handle_keyboard_interrupt(
+            gsv=gsv,
+            results=results,
+            plan=plan,
+            sn=sn,
+            already_recorded=already_recorded,
+        )
+
+    except Exception as e:
+        if not already_recorded:
+            disconnect_reason = _device_fail(
+                gsv=gsv,
+                results=results,
+                plan=plan,
+                sn=sn,
+                err=e,
+                where="Exception",
+            )
+        else:
+            disconnect_reason = f"FEHLER nach Ergebnis-Append: {e}. Bitte Gerät abnehmen."
+
+    finally:
+        try:
+            _disconnect_one(gsv, plan.dev_no, sn, reason=disconnect_reason)
+        except KeyboardInterrupt:
+            _safe_release(gsv, plan.dev_no, where="finally/KeyboardInterrupt")
+            raise
+        except Exception as e:
+            print(f"[DEV {plan.dev_no}] WARN: disconnect step failed: {e}")
+            _safe_release(gsv, plan.dev_no, where="finally/disconnect-except")
+
+    return plan, sn, aborted
+
 def _write_updated_yaml(
     src_path: Path,
     dst_path: Path,
@@ -1144,11 +1253,6 @@ def main() -> int:
             for d in DEVICE_CONFIG:
                 dev_no = int(d["dev_no"])
 
-                sn = None
-                skip_programming = False
-                already_recorded = False
-                aborted = False
-                disconnect_reason = "Weiter mit nächstem Gerät."
                 needs_sn_but_missing = False
 
                 if SN_MODE:
@@ -1174,104 +1278,16 @@ def main() -> int:
                         baud_new=CANBAUD,
                     )
 
-                try: 
-                    # if dev_no == 1:
-                    #     DEFAULT_CMD_ID_TEST = 258    # 0x102
-                    #     DEFAULT_ANS_ID_TEST = 259    # 0x103
-                    #     ok, sn = _try_activate(gsv, dev_no, DEFAULT_CMD_ID_TEST, DEFAULT_ANS_ID_TEST, tries=5, delay=0.3, read_sn=True)
-                    # else: 
-                    #     ok, sn = _try_activate(gsv, dev_no, DEFAULT_CMD_ID, DEFAULT_ANS_ID, tries=5, delay=0.3, read_sn=True)
-                    # Aktivieren immer mit Default IDs
+                plan, sn, aborted = _run_device_step(
+                    gsv=gsv,
+                    results=results,
+                    plan=plan,
+                    expected_sn=None,
+                    resolve_target_after_activate=True,
+                    validate_expected_serial=False,
+                    sn_mode_requires_known_target=needs_sn_but_missing,
+                )
 
-                    _connect_one(dev_no)
-
-
-                    _, sn, already_recorded, skip_programming, disconnect_reason = _activate_or_record_failure(
-                        gsv=gsv,
-                        results=results,
-                        plan=plan,
-                        tries=5,
-                        delay=0.3,
-                        read_sn=True,
-                        sn_mode_requires_known_target=needs_sn_but_missing,
-                        warn_where="activation",
-                        fail_message="Aktivierung (DEFAULT) fehlgeschlagen.",
-                    )
-
-                    
-
-                    if not skip_programming:
-                        plan, already_recorded, skip_programming, disconnect_reason = _resolve_target_ids_after_activate(
-                            results=results,
-                            plan=plan,
-                            sn=sn,
-                            fail_state="old",
-                            fail_message="FEHLER: Ziel-IDs konnten nicht bestimmt werden. Dieses Gerät wird übersprungen.",
-                        )
-
-                    if not skip_programming:
-                        # optional: verify start
-                        ok = _verify_ids(gsv, plan.dev_no, sn, plan.cmd_old, plan.ans_old, plan.baud_old)
-
-                        if not ok:
-                            print(f"[{_fmt_dev(plan.dev_no, sn)}] WARN: Start-IDs stimmen nicht (trotz activation).")
-                            
-                    if not skip_programming:
-                        already_recorded, skip_programming, disconnect_reason = _handle_skip_if_same_endpoint(
-                            results=results,
-                            plan=plan,
-                            sn=sn,
-                            state_on_skip="old",
-                            print_message="Ziel-IDs sind DEFAULT. Skip umstellen.",
-                            disconnect_message="OK (skip). Bitte Gerät abnehmen.",
-                        )
-
-                            
-                    if not skip_programming:
-                        sn, already_recorded, skip_programming, disconnect_reason = _apply_target_or_record_result(
-                            gsv=gsv,
-                            results=results,
-                            plan=plan,
-                            sn=sn,
-                            success_message="✅ OK: Gerät wurde auf die neuen IDs umgestellt. Bitte abnehmen.",
-                            failure_message="FEHLER: Umstellung fehlgeschlagen (state={state}). Bitte abnehmen.",
-                        )
-                        
-                except KeyboardInterrupt:
-                    aborted, already_recorded, disconnect_reason = _handle_keyboard_interrupt(
-                        gsv=gsv,
-                        results=results,
-                        plan=plan,
-                        sn=sn,
-                        already_recorded=already_recorded,
-                    )
-
-                except Exception as e:
-                    if not already_recorded:
-                        disconnect_reason = _device_fail(
-                            gsv=gsv,
-                            results=results,
-                            plan=plan,
-                            sn=sn,
-                            err=e,
-                            where="case2/wizard",
-                        )
-                    else:
-                        disconnect_reason = f"FEHLER nach Ergebnis-Append: {e}. Bitte Gerät abnehmen."
-                finally:
-                    try:
-                        _disconnect_one(gsv, plan.dev_no, sn, reason=disconnect_reason)
-                    except KeyboardInterrupt:
-                        # trotzdem versuchen freizugeben, dann sauber hochwerfen
-                        _safe_release(gsv, plan.dev_no, where="finally/KeyboardInterrupt")
-                        raise
-                    except Exception as e:
-                        print(f"[DEV {plan.dev_no}] WARN: disconnect step failed: {e}")
-                        _safe_release(gsv, plan.dev_no, where="finally/disconnect-except")
-
-                if aborted:
-                    # jetzt ganz normal zur "nächstes Gerät?" Frage weitergehen
-                    pass
                 if not _ask_continue("[WIZARD] Nächstes Gerät umstellen? [j/N]: "):
                     break
 
@@ -1321,13 +1337,6 @@ def main() -> int:
 
                 expected_sn = d.get("serial") if isinstance(d, dict) else None
 
-                sn = None
-                skip_programming = False
-                already_recorded = False
-                aborted = False
-
-                disconnect_reason = "Weiter mit nächstem Gerät."
-
                 plan = DevicePlan(
                         dev_no=dev_no,
                         cmd_old=cmd_start,
@@ -1338,98 +1347,16 @@ def main() -> int:
                         baud_new=DEFAULT_CANBAUD,
                     )
                 
+                plan, sn, aborted = _run_device_step(
+                    gsv=gsv,
+                    results=results,
+                    plan=plan,
+                    expected_sn=expected_sn,
+                    resolve_target_after_activate=False,
+                    validate_expected_serial=True,
+                    sn_mode_requires_known_target=False,
+                )
 
-                try:
-                    _connect_one(dev_no)
-
-                    _, sn, already_recorded, skip_programming, disconnect_reason = _activate_or_record_failure(
-                        gsv=gsv,
-                        results=results,
-                        plan=plan,
-                        tries=5,
-                        delay=0.3,
-                        read_sn=True,
-                        sn_mode_requires_known_target=False,
-                        warn_where="state-probe",
-                        fail_message="Aktivierung (current IDs) fehlgeschlagen.",
-                    )
-
-
-                    if not skip_programming:
-                        already_recorded, skip_programming, disconnect_reason = _validate_expected_serial(
-                            results=results,
-                            plan=plan,
-                            expected_sn=expected_sn,
-                            sn=sn,
-                        )
-   
-                    if not skip_programming:
-                        # optional: verify start
-                        ok = _verify_ids(gsv, plan.dev_no, sn, plan.cmd_old, plan.ans_old, plan.baud_old)
-
-                        if not ok:
-                            print(f"[{_fmt_dev(plan.dev_no, sn)}] WARN: Start-IDs stimmen nicht (trotz activation).")
-                    
-
-                    if not skip_programming:
-                        already_recorded, skip_programming, disconnect_reason = _handle_skip_if_same_endpoint(
-                            results=results,
-                            plan=plan,
-                            sn=sn,
-                            state_on_skip="old",
-                            print_message="current.ids ist bereits DEFAULT und activation OK. Skip reset.",
-                            disconnect_message="OK (skip). Gerät ist bereits DEFAULT. Bitte Gerät abnehmen.",
-                        )
-                            
-                    if not skip_programming:
-                        # 2-5) set default, reset, release, reactivate default, verify, release
-                        sn, already_recorded, skip_programming, disconnect_reason = _apply_target_or_record_result(
-                            gsv=gsv,
-                            results=results,
-                            plan=plan,
-                            sn=sn,
-                            success_message="✅ OK: Gerät ist jetzt DEFAULT. Bitte abnehmen.",
-                            failure_message="FEHLER: Reset auf DEFAULT fehlgeschlagen (state={state}). Bitte abnehmen.",
-                        )
-
-                except KeyboardInterrupt:
-                    aborted, already_recorded, disconnect_reason = _handle_keyboard_interrupt(
-                        gsv=gsv,
-                        results=results,
-                        plan=plan,
-                        sn=sn,
-                        already_recorded=already_recorded,
-                    )
-
-                except Exception as e:
-                    # old = current IDs @ CANBAUD
-                    # new = DEFAULT IDs @ DEFAULT_CANBAUD
-                    if not already_recorded:
-                        disconnect_reason = _device_fail(
-                            gsv=gsv,
-                            results=results,
-                            plan=plan,
-                            sn=sn,
-                            err=e,
-                            where="case3/reset-to-default",
-                        )
-                    else:
-                       disconnect_reason = f"FEHLER nach Ergebnis-Append: {e}. Bitte Gerät abnehmen." 
-                    
-                finally:
-                    try:
-                        _disconnect_one(gsv, plan.dev_no, sn, reason=disconnect_reason)
-                    except KeyboardInterrupt:
-                        # trotzdem versuchen freizugeben, dann sauber hochwerfen
-                        _safe_release(gsv, plan.dev_no, where="finally/KeyboardInterrupt")
-                        raise
-                    except Exception as e:
-                        print(f"[DEV {plan.dev_no}] WARN: disconnect step failed: {e}")
-                        _safe_release(gsv, plan.dev_no, where="finally/disconnect-except")
-
-                if aborted:
-                    # jetzt ganz normal zur "nächstes Gerät?" Frage weitergehen
-                    pass
                 if not _ask_continue("[WIZARD] Nächstes Gerät auf DEFAULT setzen? [j/N]: "):
                     break
 
@@ -1481,16 +1408,8 @@ def main() -> int:
                 ans_id = int(d["answer_id"])
 
                 start_baud = _current_canbaud_for(dev_no) or CANBAUD
-                
-                sn = None
                 expected_sn = d.get("serial") if isinstance(d, dict) else None
                 needs_sn_but_missing = False
-
-                skip_programming = False
-                already_recorded = False
-                aborted = False
-
-                disconnect_reason = "Weiter mit nächstem Gerät."
 
                 if SN_MODE:
                     # Ziel kann erst bestimmt werden, wenn SN gelesen wurde
@@ -1516,108 +1435,15 @@ def main() -> int:
                         baud_new=CANBAUD,
                     )
 
-                try: 
-                    _connect_one(dev_no)
-
-
-                    
-                    _, sn, already_recorded, skip_programming, disconnect_reason = _activate_or_record_failure(
-                        gsv=gsv,
-                        results=results,
-                        plan=plan,
-                        tries=5,
-                        delay=0.3,
-                        read_sn=True,
-                        sn_mode_requires_known_target=needs_sn_but_missing,
-                        warn_where="state-probe",
-                        fail_message="Activation failed.",
-                    )
-
-                    
-
-                    if not skip_programming:
-                        plan, already_recorded, skip_programming, disconnect_reason = _resolve_target_ids_after_activate(
-                            results=results,
-                            plan=plan,
-                            sn=sn,
-                            fail_state="old",
-                            fail_message="FEHLER: Ziel-IDs konnten nicht bestimmt werden. Dieses Gerät wird übersprungen.",
-                        )
- 
-                    
-
-                    if not skip_programming:
-                        already_recorded, skip_programming, disconnect_reason = _validate_expected_serial(
-                            results=results,
-                            plan=plan,
-                            expected_sn=expected_sn,
-                            sn=sn,
-                        )
-
-                                
-                    if not skip_programming:
-                        # Optional: prüfen
-                        ok = _verify_ids(gsv, plan.dev_no, sn, plan.cmd_old, plan.ans_old, plan.baud_old)
-
-                        if not ok:
-                            print(f"[{_fmt_dev(plan.dev_no, sn)}] WARN: Start-IDs stimmen nicht (trotz activation).")
-
-                    if not skip_programming:
-                        already_recorded, skip_programming, disconnect_reason = _handle_skip_if_same_endpoint(
-                            results=results,
-                            plan=plan,
-                            sn=sn,
-                            state_on_skip="new",
-                            print_message="Ziel-IDs == aktuelle YAML-IDs. Skip reprogram/reset.",
-                            disconnect_message="OK (skip). Bitte Gerät abnehmen.",
-                        )
-                            
-                    if not skip_programming:
-                        sn, already_recorded, skip_programming, disconnect_reason = _apply_target_or_record_result(
-                            gsv=gsv,
-                            results=results,
-                            plan=plan,
-                            sn=sn,
-                            success_message="✅ OK: Gerät wurde auf die neuen IDs umgestellt. Bitte abnehmen.",
-                            failure_message="FEHLER: Reset auf DEFAULT fehlgeschlagen (state={state}). Bitte abnehmen.",
-                        )
-
-                except KeyboardInterrupt:
-                    aborted, already_recorded, disconnect_reason = _handle_keyboard_interrupt(
-                        gsv=gsv,
-                        results=results,
-                        plan=plan,
-                        sn=sn,
-                        already_recorded=already_recorded,
-                    )
-                    
-                except Exception as e:
-                    if not already_recorded:
-                        disconnect_reason = _device_fail(
-                            gsv=gsv,
-                            results=results,
-                            plan=plan,
-                            sn=sn,
-                            err=e,
-                            where="case1/reprogram",
-                        )
-                    else:
-                        disconnect_reason = f"FEHLER nach Ergebnis-Append: {e}. Bitte Gerät abnehmen."
-                finally:
-                    try:
-                        _disconnect_one(gsv, plan.dev_no, sn, reason=disconnect_reason)
-                    except KeyboardInterrupt:
-                        # trotzdem versuchen freizugeben, dann sauber hochwerfen
-                        _safe_release(gsv, plan.dev_no, where="finally/KeyboardInterrupt")
-                        raise
-                    except Exception as e:
-                        print(f"[DEV {plan.dev_no}] WARN: disconnect step failed: {e}")
-                        _safe_release(gsv, plan.dev_no, where="finally/disconnect-except")
-                
-                # nach disconnect_one:
-                if aborted:
-                    # jetzt ganz normal zur "nächstes Gerät?" Frage weitergehen
-                    pass
+                plan, sn, aborted = _run_device_step(
+                    gsv=gsv,
+                    results=results,
+                    plan=plan,
+                    expected_sn=expected_sn,
+                    resolve_target_after_activate=True,
+                    validate_expected_serial=True,
+                    sn_mode_requires_known_target=needs_sn_but_missing,
+                )
                 
                 if not _ask_continue("[WIZARD] Nächstes Gerät bearbeiten? [j/N]: "):
                     break
