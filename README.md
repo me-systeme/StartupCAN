@@ -86,7 +86,7 @@ StartupCAN uses a YAML configuration with:
 
 For more information see the section "Device configuration".
 
-## 2. Decide which case you want to run
+### 2. Decide which case you want to run
 
 StartupCAN supports three operating modes depending on:
 
@@ -96,11 +96,11 @@ StartupCAN supports three operating modes depending on:
 
 These combinations define the workflow.
 
-## 3. Connect only one device
+### 3. Connect only one device
 
 For safety, only **one device at a time** should be connected to the CAN bus during the startup/reconfiguration process.
 
-## 4. Python dependencies
+### 4. Python dependencies
 
 Install the required Python packages:
 
@@ -108,7 +108,7 @@ Install the required Python packages:
 pip install ruamel.yaml
 ```
 
-## 5. Run the script
+### 5. Run the script
 
 Run the startup script and follow the terminal prompts.
 
@@ -116,7 +116,7 @@ Run the startup script and follow the terminal prompts.
 python run.py
 ```
 
-## 6. Check `config.updated.yaml`
+### 6. Check `config.updated.yaml`
 
 After the run, StartupCAN writes a `config.updated.yaml` file that reflects the actual detected state of the devices.
 
