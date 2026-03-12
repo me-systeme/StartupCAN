@@ -19,6 +19,30 @@ StartupCAN is useful when you want to:
 The tool is especially useful in production, commissioning, service, or recovery workflows where devices are connected over CAN and should be handled one by one in a controlled and reproducible way.
 
 
+## Workflow overview
+
+```mermaid
+flowchart TD
+  B["1. Activate with current IDs and baudrate"]
+
+  B -->|FAIL| P
+  B -->|OK| C["2. Serial-Check<br/>if serial is set in current.ids and/or new.ids"]
+
+  C -->|FAIL| F2["Serial mismatch / serial unreadable / target IDs could not be determined"]
+  C -->|OK| D["3. Read CAN Settings<br/>(best-effort)"]
+
+  D -->|OK/ not OK| E["4. Check <br/>Same Endpoint?"]
+  
+  E -->|No| F["5. Set new IDs and baudrate<br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
+  E -->|Yes| F3["SUCCESS<br/>current.ids = new.ids"]
+  
+  F -->|FAIL| P["State probe<br/>old / new / old_newbaud / new_oldbaud / unknown"]
+  F -->|OK| S["SUCCESS<br/>current.ids = new.ids"]
+
+``` 
+
+
+
 ## Advantages
 
 StartupCAN has several practical advantages:
@@ -97,28 +121,6 @@ python run.py
 After the run, StartupCAN writes a `config.updated.yaml` file that reflects the actual detected state of the devices.
 
 
-
-## Workflow overview
-
-```mermaid
-flowchart TD
-  B["1. Activate with current IDs and baudrate"]
-
-  B -->|FAIL| P
-  B -->|OK| C["2. Serial-Check<br/>if serial is set in current.ids and/or new.ids"]
-
-  C -->|FAIL| F2["Serial mismatch / serial unreadable / target IDs could not be determined"]
-  C -->|OK| D["3. Read CAN Settings<br/>(best-effort)"]
-
-  D -->|OK/ not OK| E["4. Check <br/>Same Endpoint?"]
-  
-  E -->|No| F["5. Set new IDs and baudrate<br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
-  E -->|Yes| F3["SUCCESS<br/>current.ids = new.ids"]
-  
-  F -->|FAIL| P["State probe<br/>old / new / old_newbaud / new_oldbaud / unknown"]
-  F -->|OK| S["SUCCESS<br/>current.ids = new.ids"]
-
-``` 
 
 ## Operating modes
 
