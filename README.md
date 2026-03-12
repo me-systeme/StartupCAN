@@ -1,236 +1,376 @@
 # StartupCAN
 
-Vorteile gegenüber GSVmulti: 
+StartupCAN is a headless CAN startup and reconfiguration tool for GSV CAN devices.
 
-* Das Gerät muss nicht neu gestartet werden
+It is designed to configure devices directly over the CAN bus, without requiring USB access and without using GSVmulti for the actual reconfiguration workflow.
 
-* Kein Anschließen per USB und kein verwenden von GSVmulti
 
+## What is this application for?
+
+StartupCAN is useful when you want to:
+
+- reassign CAN IDs of one or more devices
+- move devices from default CAN settings to unique CAN settings
+- reset devices back to default CAN settings
+- apply a defined target configuration from YAML
+- generate an updated YAML file that reflects the actual device state after a run
+- prepare devices for Open Source applications like the GSV86CAN Viewer (https://github.com/me-systeme/GSV86CANViewer)
+
+The tool is especially useful in production, commissioning, service, or recovery workflows where devices are connected over CAN and should be handled one by one in a controlled and reproducible way.
+
+
+## Advantages
+
+StartupCAN has several practical advantages:
+
+- fully scriptable and reproducible workflow
+- YAML-based source of truth for current and target CAN settings
+- automatic creation of `config.updated.yaml`
+- supports partial success and interrupted runs
+- detects and records uncertain states via state probing
+- well-structured error handling with clear logs for diagnosis and recovery
+- supports mapping by `dev_no` or by `serial`
+
+
+## Requirements
+
+StartupCAN requires:
+
+- Python 3.10 or newer (32 bit)
+- access to the GSV CAN DLL / Python wrapper used in your project
+- a working CAN interface
+- a valid YAML configuration
+- physical access to connect **only one device at a time** during the workflow
+
+Recommended:
+
+- a known and stable CAN bus setup
+- correct baudrate configuration in YAML
+- a backup of the original configuration before running
+
+
+## Getting started
+
+### 1. Prepare the YAML configuration
+
+StartupCAN uses a YAML configuration with:
+
+- `devices.config.current`
+- `devices.config.new`
+- `devices.config.assign`
+- `dll.canbaud`
+
+For more information see the section "Device configuration".
+
+## 2. Decide which case you want to run
+
+StartupCAN supports three operating modes depending on:
+
+* `current.default`
+
+* `new.default`
+
+These combinations define the workflow.
+
+## 3. Connect only one device
+
+For safety, only **one device at a time** should be connected to the CAN bus during the startup/reconfiguration process.
+
+## 4. Python dependencies
+
+Install the required Python packages:
+
+```bash
+pip install ruamel.yaml
+```
+
+## 5. Run the script
+
+Run the startup script and follow the terminal prompts.
+
+```bash
+python run.py
+```
+
+## 6. Check `config.updated.yaml`
+
+After the run, StartupCAN writes a `config.updated.yaml` file that reflects the actual detected state of the devices.
+
+
+
+## Workflow overview
 
 ```mermaid
 flowchart TD
-  B["1. Activate mit current IDs and Baudrate"]
+  B["1. Activate with current IDs and baudrate"]
 
   B -->|FAIL| P
-  B -->|OK| C["2. Serial-Check<br/>wenn serial in current.ids und/oder serial in new.ids"]
+  B -->|OK| C["2. Serial-Check<br/>if serial is set in current.ids and/or new.ids"]
 
-  C -->|FAIL| F2["Serial passt nicht / nicht lesbar / Ziel ID konnte nicht bestimmt werden"]
+  C -->|FAIL| F2["Serial mismatch / serial unreadable / target IDs could not be determined"]
   C -->|OK| D["3. Read CAN Settings<br/>(best-effort)"]
 
   D -->|OK/ not OK| E["4. Check <br/>Same Endpoint?"]
   
-  E -->|No| F["5. Set new IDs and Baudrate<br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
+  E -->|No| F["5. Set new IDs and baudrate<br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
   E -->|Yes| F3["SUCCESS<br/>current.ids = new.ids"]
   
-  F -->|FAIL| P["State-Probe<br/>old / new / old_newbaud / new_oldbaud / unknown"]
+  F -->|FAIL| P["State probe<br/>old / new / old_newbaud / new_oldbaud / unknown"]
   F -->|OK| S["SUCCESS<br/>current.ids = new.ids"]
 
 ``` 
 
+## Operating modes
 
-##  Case 1 – Device Update (`current.default=false`, `new.default=false`)
+###  Case 1 – Device Update (`current.default=false`, `new.default=false`)
+
+In this mode, devices with already configured CAN IDs are reassigned to new unique CAN IDs. The baudrate is changed to the baudrate defined in `dll.canbaud` in the YAML.
+
+For safety, only one device may be connected at a time.
+
+Mapping is done either by:
+
+* `dev_no`, or
+
+* `serial` from `new.ids`
+
+Each device is processed sequentially:
+
+* activated using the **current IDs** and **current baudrate**
+
+* optionally checked (serial number / CAN settings)
+
+* changed to the **new IDs** and **new baudrate**
+
+* verified via reset / release / re-activate
+
+* released afterwards
+
+* finally written into `config.updated.yaml` as the actual state
+
+At the end, devices **may be connected together on the bus**.
+
+
+
+
+### Case 2 – Default mode (`current.default=true`, `new.default=false`)
+
+In this mode, devices start with the default CAN IDs and default baudrate and are reassigned to new unique CAN IDs and the baudrate from `dll.canbaud`.
+
+For safety, only one device may be connected at a time.
+
+Mapping is done either by:
+
+* `dev_no`, or
+
+* `serial` from `new.ids`
+
+The `current.ids` list is ignored.
+
+Each device is processed sequentially:
+
+* activated using the **default IDs** and **default baudrate**
+
+* optionally checked (serial number / CAN settings)
+
+* changed to the **new IDs** and **new baudrate**
+
+* verified via reset / release / re-activate
+
+* released afterwards
+
+* finally written into `config.updated.yaml` as the actual state
+
+At the end, devices **may be connected together on the bus**.
+
+
+
+### Case 3 - Forced Reset Wizard (`current.default = false`, `new.default = true`)
+
+
+In this mode, the goal is to reset devices back to the default CAN settings:
+
+* `default_cmd_id`
+
+* `default_ans_id`
+
+* `default_canbaud`
+
+For safety, only one device may be connected at a time.
+
+The `new.ids` list is ignored.
+
+Each device is processed sequentially:
+
+* activated using the **current IDs** and **current baudrate**
+
+* optionally checked (serial number / CAN settings)
+
+* changed to the **default IDs** and **default baudrate**
+
+* verified via reset / release / re-activate
+
+* released afterwards
+
+* written into `config.updated.yaml` as the actual state
+
+
+At the end, devices **must not be connected together on the bus**.
  
 
-In diesem Modus werden (eindeutige) CAN IDs auf neue eindeutige CAN IDs umgestellt und die Baudrate wird auf die Baudrate in `dll.baudrate` aus dem YAML gesetzt. Zur Sicherheit darf immer nur ein Gerät gleichzeitig am Bus sein. Es wird per `dev_no` oder per `serial` aus `new.ids` gemappt. Jedes Gerät wird nacheinander:
 
-* mit den **current IDs** und **current Baudrate** aktiviert,
-
-* optional geprüft (Seriennummer / CAN-Settings),
-
-* auf die **new IDs** und die **neue Baudrate** umgestellt,
-
-* per Reset/Release/Re-Activate verifiziert,
-
-* danach wieder released,
-
-* und am Ende wird eine **config.updated.yaml** geschrieben, die den Ist-Zustand abbildet.
-
-Am Ende dürfen die Geräte **gemeinsam** am Bus sein.
+## Old (`current`) vs new (`new`) CAN Settings
 
 
+### Case 1:
 
-## Case 2 – Default mode (`current.default=true`, `new.default=false`)
+* **old IDs** are the IDs in `current.ids`
 
+* **old baudrate** is either the baudrate in `current.ids` or `dll.canbaud` as fallback
 
-In diesem Modus werden die Default CAN IDs und die Default Baudrate auf neue eindeutige CAN IDs und die Baudrate in `dll.canbaud` umgestellt. Zur Sicherheit darf immer nur ein Gerät gleichzeitig am Bus sein. Es wird entweder per `serial` oder per `dev_no` aus `new.ids` gemappt. Die `current.ids` Liste wird ignoriert. Jedes Gerät wird nacheinander:
+* **new IDs** are the IDs in `new.ids`
 
-* mit den **default IDs** und **default Baudrate** aktiviert,
+* **new baudrate** is the baudrate in `dll.canbaud`
+ 
 
-* optional geprüft (Seriennummer / CAN-Settings),
+### Case 2:
 
-* auf die **new IDs** und **neue Baudrate** umgestellt,
+* **old IDs** are the **default IDs**
 
-* per Reset/Release/Re-Activate verifiziert,
+* **old baudrate** is the **default baudrate**
 
-* danach wieder released,
+* **new IDs** are the IDs in `new.ids`
 
-* und am Ende wird eine **config.updated.yaml** geschrieben, die den Ist-Zustand abbildet.
-
-Am Ende dürfen die Geräte **gemeinsam** am Bus sein.
-
-
-## Case 3 - Forced Reset Wizard (`current.default = false`, `new.default = true`)
+* **new baudrate** is the baudrate in `dll.canbaud`
 
 
-In diesem Modus ist das Ziel **Rücksetzen auf die DEFAULT-CAN-Settings** (`default_cmd_id/default_ans_id/default_canbaud`). Zur Sicherheit darf immer nur ein Gerät gleichzeitig am Bus sein. Die `new.ids` Liste wird ignoriert. Jedes Gerät wird nacheinander:
+### Case 3:
 
-1. mit den **current IDs** and **Baudrate** aktiviert
+* **old IDs** are the IDs in `current.ids`
 
-2. optional geprüft (Seriennummer / CAN-Settings)
+* **old baudrate** is either the baudrate in `current.ids` or `dll.canbaud` as fallback
 
-3. auf **DEFAULT IDs** und **DEFAULT Baudrate** umgestellt
+* **new IDs** are the **default IDs**
 
-4. per Reset/Release/Re-Activate verifiziert
-
-5. danach wieder released
-
-6. am Ende wird eine `config.updated.yaml` geschrieben, die den Ist-Zustand abbildet.
-
-Am Ende dürfen die Geräte **nicht gemeinsam** am Bus sein. 
+* **new baudrate** is the **default baudrate**
 
 
-## Alte (current)/Neue (new) Can-Settings
-
-
-**Case 1:**
-
-* alte IDs sind die IDs in `current.ids`. Die alte Baudrate ist entweder die Baudrate in `current.ids` oder die `dll.canbaud` (Fallback). 
-
-* neue Ids sind die ids in `new.ids` und die neue Baudrate ist die in `dll.canbaud`.
-
-**Case 2:**
-
-* alte IDs sind die default IDs und die alte Baudrate ist die default Baudrate.
-
-* neue Ids sind die ids in `new.ids` und die neue Baudrate ist die in `dll.canbaud`.
-
-**Case 3:**
-
-* alte IDs sind die IDs in `current.ids`. Die alte Baudrate ist entweder die Baudrate in `current.ids` oder die `dll.canbaud` (Fallback).
-
-* neue IDs sind die default IDs und die neue Baudrate ist die default Baudrate.
 
 ## State Probe
 
-Bei einer State Probe wird geprüft, welche IDs tatsächlich aktiv sind:
+A state probe checks which CAN settings are most likely currently active on the device.
 
-* **state = "old"** → Gerät besitzt sehr wahrscheinlich die **alten** IDs und **alte** Baudrate.
-
-* **state = "new"** → Gerät ist sehr wahrscheinlich bereits auf **neuen** IDs und **neuer** Baudrate.
-
-* **state = "old_newbaud"** → Gerät hat **alte** IDs und die **neue** Baudrate.
-
-* **state = "new_oldbaud"** → Gerät hat **neue** IDs und die **alte** Baudrate.
-
-* **state = "unknown"** → weder old noch new noch Mischzustände konnten aktiviert werden
+Possible states:
 
 
-YAML-Update (`config.updated.yaml`) abhängig vom state:
+* **state = "old"** → device most likely still has the **old IDs** and **old baudrate**
 
-* **state="old"** → `current.ids` bleibt auf **alten** IDs und **alter** Baudrate
+* **state = "new"** → device most likely already has the **new IDs** and **new baudrate**
 
-* **state="new"** → `current.ids` wird auf **neue** IDs und **neue** Baudrate gesetzt
+* **state = "old_newbaud"** → device has the **old IDs** and the **new baudrate**
 
-* **state = "old_newbaud"** → `current.ids` wird mit **alter** ID und **neuer** Baudrate aktualisiert.
+* **state = "new_oldbaud"** → device has the **new IDs** and the **old baudrate**
 
-* **state = "new_oldbaud"** → `current.ids` wird mit **neuer** ID und **alter** Baudrate aktualisiert.
-
-* **state="unknown"** → `current.ids` bleibt auf **alten** IDs und **alter** Baudrate **und** `unknown: true` wird gesetzt (als Warnflag)
+* **state = "unknown"** → neither old nor new nor mixed states could be activated successfully
 
 
-## Ablauf
+### YAML update behavior depending on state:
+
+`config.updated.yaml` is written based on the detected state:
+
+* **state="old"** → `current.ids` remains on **old IDs** and **old baudrate**
+
+* **state="new"** → `current.ids` is updated to **new IDs** and **new baudrate**
+
+* **state = "old_newbaud"** → `current.ids` is updated with **old IDs** and **new baudrate**
+
+* **state = "new_oldbaud"** → `current.ids` is updated with **new IDs** and **old baudrate**
+
+* **state="unknown"** → `current.ids` remains on **old IDs** and **old baudrate**, and `unknown: true` is added as a warning flag
 
 
-**Serial check**
-
-Case 1: 
-
-* Falls `serial` in `current ids`: Ist die Seriennummer richtig?
-
-* Falls `serial` in `new.ids`: Get Target IDs for Serial. 
-
-Case 2: 
-
-* Falls `serial` in `new.ids`: Get Target IDs for Serial.
-
-Case 3:
-
-* Falls `serial` in `current ids`: Ist die Seriennummer richtig?
+## Detailed process
 
 
 
-### **Schritt 1 - Activate (current IDs and Baudrate)**
+### Step 1 – Activate (current IDs and baudrate)
 
 ```mermaid
 flowchart TD
-    A["1. Activate mit current IDs and Baudrate"]
+    A["1. Activate with current IDs and baudrate"]
 ```
 
 * `activate(dev_no, cmd_id, answer_id, canbaud=start_baud)`
-* Seriennummer wird gelesen (`get_serial_no`) und geloggt.
+* serial number is read via `get_serial_no` and logged
 
-Wenn Schritt 1 fehlschlägt: → siehe Fehlerfall **1**.
+If Step 1 fails, a **state probe** is performed (see **Failure Case 1**).
 
-Wenn Schritt 1 erfolgreich: → weiter mit Schritt **2**. 
+If Step 1 succeeds, continue with **Step 2**.
 
 
-### **Schritt 2 – Seriennummer-Check (optional, wenn serial in current.ids und / oder serial in new.ids gesetzt)**
+### Step 2 – Serial check (optional)
 
 ```mermaid
 flowchart TD
-A["2. Serial-Check<br/>wenn serial in current.ids und/oder serial in new.ids"]
+A["2. Serial check<br/>if serial is set in current.ids and/or new.ids"]
 ```
 
-**Case 1 + 3**: Wenn `devices.config.current.ids` für dieses `dev_no` eine `serial` enthält, muss die gelesene Seriennummer passen:
+**Case 1 + 3**: 
 
-* 2.1 `sn is None` (SN konnte nicht gelesen werden) → Fehlerfall **2.1**
+If `devices.config.current.ids` contains a `serial` for this `dev_no`, the read serial number must match.
 
-* 2.2 `sn != expected_sn` → Fehlerfall **2.2**
+* **2.1** `sn is None` → serial could not be read (see **Failure Case 2.1**)
 
-**Case 1 + 2**: Wenn keine `serial` in `new.ids` konfiguriert sind, wird per `dev_no` gemappt.
-Für das Mapping per Seriennummer muss jeder Eintrag in `serial` für jedes Gerät in `new.ids` existieren. In diesem Modus muss man beim Anschließen der Geräte nicht auf die Reihenfolge (`dev_no`) achten, sondern das Gerät mit der Seriennummer `serial` erhält die entsprechenden neuen IDs aus `new.ids`.
-
-* 2.3 `_target_ids(dev_no, sn)` failed → Fehlerfall **2.3**
+* **2.2** `sn != expected_sn` → serial mismatch (see **Failure Case 2.2**)
 
 
-Wenn SN ok oder keine SN in YAML gefordert ist → weiter mit Schritt **3**.
+**Case 1 + 2**: 
 
-Hinweis: In allen Fehlerfällen ist das Gerät **aktiv gewesen**, deshalb wird **released**.
+If all entries in `new.ids` contain a `serial`, the target mapping can be done by serial instead of by `dev_no`.
+
+* **2.3** `_target_ids(dev_no, sn)` failed → target IDs could not be determined (see **Failure Case 2.3**)
+
+If serial is valid or no serial is required, continue with **Step 3**.
+
+Note: in all serial-check failure cases the device had already been activated, so it must be released.
 
 
-### **Schritt 3 – Read CAN Settings (optional / Best-Effort)**
+
+### Step 3 – Read CAN settings (optional / best effort)
 
 ```mermaid
 flowchart TD
 A["3. Read CAN Settings<br/>(best-effort)"]
 ``` 
 
-* get_can_settings liest CMD/ANS/Baudrate aus dem Gerät (Index-Konstanten müssen korrekt sein).
+* `get_can_settings` reads CMD ID / ANS ID / baudrate from the device
 
-* Fehler hier ist **nur eine Warnung** und stoppt den Ablauf nicht.
+* if this fails, only a warning is printed
 
-**Wichtig:** Auch wenn Schritt 3 fehlschlägt, geht es **trotzdem weiter** zu Schritt **4**.
+**Important:** failure here does **not** stop the workflow.
+
+The script still continues with **Step 4**.
 
 
 
 
-### **Schritt 4 - Check same endpoint**
+### Step 4 – Check same endpoint
 
 ```mermaid
 flowchart TD
 A["4. Check <br/>Same endpoint?"]
 ```
 
-Falls das Gerät bereits die neuen IDs und die neue Baudrate besitzt, wird das Gerät übersprungen. 
+If the device already has the target IDs and target baudrate, it is skipped.
 
-Wenn nicht, geht es weiter mit Schritt **5**
+Otherwise the workflow continues with **Step 5**.
 
 
-### **Schritt 5 – Set IDs and Baudrate → Reset → Release → Re-Activate → Verify → Release**
+### Step 5 – Set IDs and baudrate → Reset → Release → Re-Activate → Verify → Release
 
 ```mermaid
 flowchart TD
-A["5. Set new IDs and Baudrate <br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
+A["5. Set new IDs and baudrate <br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
 ``` 
 
 * `set_can_settings(CANSET_CAN_IN_CMD_ID, cmd_new)`
@@ -243,207 +383,342 @@ A["5. Set new IDs and Baudrate <br/>Reset → Release<br/>Re-Activate (Retry)<br
 
 * `release()`
 
-* Re-Activate mit `cmd_new/ans_new` und `baud_new` (mit Retry-Logik `_try_activate_n`)
+* re-Activate using `cmd_new / ans_new / baud_new`
 
-* Verify über `get_can_settings` (Best-Effort)
+* verify via `get_can_settings`
 
-* abschließendes `release()`
+* final `release()`
 
-Wenn Schritt 5 erfolgreich ist → Device gilt als **OK / umgestellt**.
+If Step 5 succeeds, the device is considered **successfully reconfigured**.
 
-Wenn Schritt 5 fehlschlägt → es wird eine **Zustandsprobe** durchgeführt (old/new/old_newbaud/new_oldbaud/unknown) und entsprechend in `config.updated.yaml` eingetragen (siehe Fehlerfall **5**).
+If Step 5 fails, a **state probe** is performed and the resulting state is written into `config.updated.yaml`. (see **Failure Case 5**).
 
 
-### **Erfolgsfall**
+### Success case
 
 ```mermaid
 flowchart TD
 A["SUCCESS<br/>current.ids = new IDs"]
 ```
 
-Wenn ein Gerät erfolgreich umgestellt wurde (`ok=True`):
+If a device was successfully reconfigured (`ok=True`):
 
-* `config.updated.yaml` schreibt für dieses Gerät in `current.ids` die **neuen IDs** (und ggf. die Seriennummer und Baudrate).
+* `config.updated.yaml` stores the new IDs
 
-Wenn **alle** Geräte erfolgreich umgestellt wurden:
+* optionally the serial number and baudrate are also stored
 
-* `new.ids` wird in `config.updated.yaml` geleert (und `new.default=false`).
+If **all** devices were successfully reconfigured:
 
-* Dadurch ist ein erneuter Run “safe” und versucht nicht erneut umzustellen.
+* `new.ids` is cleared in `config.updated.yaml` 
 
-* Baudrate kommt nicht mehr in `current.ids` vor. Die richtige Baudrate steht in `dll.canbaud` oder ist die default Baudrate (je nach Case).
+* `new.default=false` is written
 
-**Case 1 + 2:** Die Geräte können nun **gemeinsam** am Bus sein.
+* this makes the next run safe and prevents accidental repeated reconfiguration
 
-**Case 3:** Die Geräte dürfen **nicht gemeinsam** am Bus sein.
+For baudrate:
+
+* baudrate is no longer written into current.ids if the run fully succeeded
+
+* the correct baudrate is then implicitly defined by either:
+
+    * `dll.canbaud`, or
+
+    *  the default baudrate, depending on the case
+
+**Case 1 + 2:** devices may now be connected **together** on the bus.
+
+**Case 3:** devices must **not** be connected **together** on the bus.
 
 
 
-## **Fehlerfälle und Verhalten**
+## Failure cases and behavior
 
-### **1. Activate (Step 1) schlägt fehl**
+### 1. Activate (Step 1) fails
 
 ```mermaid
 flowchart TD
-A["State-Probe<br/>old / new / old_newbaud / new_oldbaud / unknown"]
+A["State probe<br/>old / new / old_newbaud / new_oldbaud / unknown"]
 ```
 
-**Symptom:** activate funktioniert nicht (Timeout/249/…); keine aktive Session.
+**Symptom:** 
 
-**Aktion:**
+* `activate` fails 
 
-* Es wird eine **State-Probe** durchgeführt (siehe oben)
+* no active session could be established
 
-* Je nach state wird `current.ids` mit neuen/alten Can Settings geupdated
+**Action:**
 
-* Gerät wird **nicht umgestellt**.
+* a **state probe** is performed
 
-* Gerät muss vom Bus genommen werden
+* `current.ids` is updated according to the detected state
 
-* `new.ids` und `new.default` bleibt unverändert (Ziel bleibt bestehen)
+* the device is **not reconfigured**
+
+* the device must be removed from the bus
+
+* `new.ids` and `new.default` remain unchanged
 
 
 
-### **2. Serial-Check (Step 2) schlägt fehl (wenn serial in current.ids oder in new.ids gesetzt ist)**
+### 2. Serial check (Step 2) fails
 
 ```mermaid
 flowchart TD
-A["Serial passt nicht / nicht lesbar / SN_MODE: Ziel ID konnte nicht bestimmt werden"]
+A["Serial mismatch / unreadable / target IDs could not be determined"]
 ```
 
 **Case 1 + 3:**
 
-**2.1 Seriennummer konnte nicht gelesen werden (sn is None)**
+**2.1 Serial number could not be read (`sn is None`)**
 
-**Aktion:**
+**Action:**
 
-* Gerät wird **nicht umgestellt.**
+* device is not **reconfigured**
 
-* Gerät muss zur Sicherheit vom Bus genommen werden.
+* device must be removed from the bus
 
-* Es wird `release()` ausgeführt (weil das Gerät aktiv war).
+* `release()` is executed
 
-**YAML-Update:**
+**YAML update:**
 
-* `current.ids` bleibt auf den alten IDs; der `serial` Eintrag wird nicht verändert (die Seriennummer könnte korrekt sein).
+* `current.ids` remains on the old IDs 
 
-* `new.ids` und `new.default` bleibt bestehen (bei erneutem Run kann es wieder versucht werden).
+* the original `serial` entry is kept
 
-**2.2 Seriennummer passt nicht (sn != expected_sn)**
+* `new.ids` and `new.default` remain unchanged
 
-**Aktion:**
+**2.2 Serial number does not match (`sn != expected_sn`)**
 
-* Gerät wird **nicht umgestellt** (Schutz vor “falsches Gerät unter falschem dev_no”).
+**Action:**
 
-* Gerät muss zur Sicherheit vom Bus genommen werden.
+* device is **not reconfigured**
 
-* `release()` wird ausgeführt (weil aktiv).
+* device must be removed from the bus
 
-**YAML-Update:**
+* `release()` is executed
 
-* `current.ids` bleibt auf den alten IDs.
+**YAML update:**
 
-* Die gelesene Seriennummer wird in `config.updated.yaml` **mitgeschrieben**, damit man beim nächsten Run die Zuordnung korrigieren kann.
+* `current.ids` remains on the old IDs
 
-* `new.ids` und `new.default` bleibt bestehen.
+* the read serial number is written into `config.updated.yaml` 
+
+* `new.ids` and `new.default` remain unchanged
 
 
 **Case 1 + 2:**
 
-**2.3 SN_MODE: Ziel IDs konnten nicht bestimmt werden**
+**2.3 SN mode: target IDs could not be determined**
 
-**Aktion:**
+**Action:**
 
-* Gerät wird **nicht umgestellt**
+* device is **not reconfigured**
 
-* Gerät muss zur Sicherheit vom Bus genommen werden.
+* device must be removed from the bus
 
-* `release()` wird ausgeführt (weil aktiv).
+* `release()` is executed
 
-* `current.ids` bleibt auf den alten IDs.
+**YAML update:**
 
-* Die gelesene Seriennummer wird in `config.updated.yaml` **mitgeschrieben**
+* `current.ids` remains on the old IDs
 
-* `new.ids` und `new.default` bleibt bestehen.
+* the read serial number is written into `config.updated.yaml`
+
+* `new.ids` and `new.default` remain unchanged
 
 
 
-### **3. Read CAN Settings (Step 3) schlägt fehl**
+### 3. Read CAN settings (Step 3) fails
 
 ```mermaid
 flowchart TD
-A["Warnung"]
+A["Warning"]
 ```
 
-**Aktion:**
+**Action:**
 
-* Nur Warnung, **kein Abbruch**.
+* warning only
 
-* Es wird trotzdem **Schritt 4** ausgeführt.
+* the process continues with Step 4
 
 **Interpretation:**
 
-* Index-Konstanten könnten falsch sein, oder Device liefert in diesem Zustand keine Settings.
+* index/constants may be wrong
 
-* Das betrifft nur die Verifikation/Diagnose, nicht zwingend das Umstellen selbst.
+* or the device may not provide settings in this state
 
-
-
-### **4. Check same can settings ergibt: new can settings stimmen mit current can settings überein**
-
-```mermaid
-flowchart TD
-E["Check = Same IDs and Baudrate"]
-```
-
-Das ist genau genommen kein Fehler. Das Device wird lediglich übersprungen.
-
-**Aktion:**
-
-* Gerät wird **nicht umgestellt.**
-
-* Gerät muss zur Sicherheit vom Bus genommen werden.
-
-* `release()` wird ausgeführt (weil aktiv).
-
-**YAML-Update:**
-
-* SUCCESS: in `current.ids` werden neue ids und die neue Baudrate geschrieben (state=new). 
+This affects verification/diagnostics, but not necessarily reconfiguration itself.
 
 
 
-### **5. Umstellung/Verify (Step 5) schlägt fehl**
+### 4. Same endpoint detected
 
 ```mermaid
 flowchart TD
-A["State-Probe<br/>old / new / old_newbaud / new_oldbaud / unknown"]
+E["Check = Same IDs and baudrate"]
+```
+
+This is not really a failure. The device is simply skipped.
+
+**Action:**
+
+* device is **not reconfigured**
+
+* device must be removed from the bus
+
+* `release()` is executed
+
+**YAML update:**
+
+* treated as success
+
+* `current.ids` is written with the new IDs and new baudrate (`state="new"`)
+
+
+
+### 5. Reconfiguration / verify (Step 5) fails
+
+```mermaid
+flowchart TD
+A["State probe<br/>old / new / old_newbaud / new_oldbaud / unknown"]
 ```
 
 **Aktion:**
 
-* Gerät wird **nicht sicher als umgestellt** markiert.
+* device is **not safely marked as reconfigured**
 
-* Es wird eine **State-Probe** durchgeführt (siehe oben)
+* a **state probe** is performed
 
-* Je nach state wird `current.ids` mit neuen/alten Can Settings geupdated
+* `current.ids` is updated according to the detected state
 
-* Gerät muss vom Bus genommen werden. 
+* device must be removed from the bus
 
-* `new.ids` und `new.default` bleibt unverändert (Ziel bleibt bestehen)
-
-
+* `new.ids` and `new.default` remain unchanged
 
 
 
-## Geräte-Konfiguration (devices.config)
 
-Die Konfiguration besteht aus zwei Listen:
 
-* `devices.config.current` beschreibt den **Ist-Zustand** (mit welchen CAN-IDs die Geräte aktuell erreichbar sind)
+## Device configuration (`devices.config`)
 
-* `devices.config.new` beschreibt den **Soll-Zustand** (auf welche CAN-IDs umgestellt werden soll)
+The configuration consists of two main lists:
 
-Zusätzlich gibt es Default-IDs (Wizard/Reset) und eine Default Baudrate:
+* `devices.config.current` describes the **actual current state**:
+
+```yaml
+    current: 
+      default: false
+      ids:
+        - dev_no: 1
+          cmd_id: "0x102"
+          answer_id: "0x103"
+        - dev_no: 2
+          cmd_id: "0x104"
+          answer_id: "0x105"
+        - dev_no: 3
+          cmd_id: "0x106"
+          answer_id: "0x107"
+```
+
+or 
+
+```yaml
+    current: 
+      default: true
+      ids: []
+
+```
+
+the list can also contain serials:
+
+```yaml
+    current: 
+      default: false
+      ids:
+        - dev_no: 1
+          serial: 25455437
+          cmd_id: "0x102"
+          answer_id: "0x103"
+        - dev_no: 2
+          serial: 25455423
+          cmd_id: "0x104"
+          answer_id: "0x105"
+        - dev_no: 3
+          serial: 25455439
+          cmd_id: "0x106"
+          answer_id: "0x107"
+```
+
+and/or canbauds:
+
+```yaml
+    current: 
+      default: false
+      ids:
+        - dev_no: 1
+          serial: 25455437
+          canbaud: 250000
+          cmd_id: "0x102"
+          answer_id: "0x103"
+        - dev_no: 2
+          serial: 25455423
+          canbaud: 1000000
+          cmd_id: "0x104"
+          answer_id: "0x105"
+        - dev_no: 3
+          serial: 25455439
+          canbaud: 250000
+          cmd_id: "0x106"
+          answer_id: "0x107"
+```
+
+
+* `devices.config.new` describes the **desired target state**:
+
+```yaml
+    new:
+      default: false
+      ids:
+        - dev_no: 1
+          cmd_id: "0x202"
+          answer_id: "0x203"
+        - dev_no: 2
+          cmd_id: "0x204"
+          answer_id: "0x205"
+        - dev_no: 3
+          cmd_id: "0x206"
+          answer_id: "0x207"
+```
+
+or
+
+```yaml
+    new:
+      default: true
+      ids: []
+```
+
+It can also contain serials (serial mapping):
+
+```yaml
+    new:
+      default: false
+      ids:
+        - dev_no: 1
+          serial: 25455437
+          cmd_id: "0x202"
+          answer_id: "0x203"
+        - dev_no: 2
+          serial: 25455423
+          cmd_id: "0x204"
+          answer_id: "0x205"
+        - dev_no: 3
+          serial: 25455439
+          cmd_id: "0x206"
+          answer_id: "0x207"
+```
+
+Additionally, default IDs and a default baudrate are configured:
 
 ```yaml
 devices:
@@ -454,7 +729,7 @@ devices:
       default_ans_id: "0x101"
 ``` 
 
-Für mehrere Geräte am CAN Bus soll die Baudrate aber auf die Baudrate in `dll.canbaud` umgestellt werden:
+For multi-device CAN bus operation, the baudrate should usually be switched to the baudrate from `dll.canbaud`:
 
 ```yaml
 dll:
@@ -466,7 +741,7 @@ dll:
   canbaud: 250000
 ```
 
-Zugelassene Baudraten sind: 
+Supported baudrates are: 
 
 * 1000000, 
 * 500000, 
@@ -476,200 +751,156 @@ Zugelassene Baudraten sind:
 * 50000, 
 * 25000.
 
-Für mehrere Geräte am CAN Bus wird empfohlen, eine Baudrate von 250000 zu wählen.
-
-### Allgemeine Regeln
-
-Diese Validierungen werden unabhängig vom Case geprüft:
-
-* `dev_no` **muss pro Liste eindeutig sein**
-→ `current.ids` darf keinen `dev_no` doppelt enthalten, ebenso `new.ids`.
-
-* **Pro Gerät muss gelten**: `cmd_id != answer_id`
-→ Falls gleich: Konfigurationsfehler.
-
-* **Eindeutigkeit der CAN-ID-Zahlen innerhalb einer Liste**.
-
-    Wenn `new.default=false` gilt die strikte Regel:
-
-    * Keine einzelne Zahl darf doppelt vorkommen (weder cmd-cmd, ans-ans, cmd-ans), da wir eindeutige CAN Zahlen erreichen wollen.
-
-    Aber: wenn `current.default=false`:
-
-    * CAN Zahlen dürfen doppelt vorkommen, da wir alle Geräte einzeln anschließen. 
-
-    Wenn `*.default=true` gilt für die entsprechende CAN ID Liste:
-
-    * Doppelte IDs (default IDs oder current IDs) sind erlaubt, **aber** pro Gerät bleibt `cmd_id != answer_id` Pflicht.
-
-* **Default-IDs dürfen nicht identisch sein**
-
-    `default_cmd_id != default_ans_id` (sonst wäre Default-Betrieb kaputt).
-
-* **Listen dürfen nicht leer sein**
-
-    Wenn `new.default=false` darf die Liste `new.ids` nicht leer sein. Ansonsten gibt es keine neue Zuordnung der IDs.
-
-    Das gleiche gilt für den Fall `current.default=false` mit der Liste `current.ids`.
+For multiple devices on one CAN bus, 250000 is recommended.
 
 
-    Wenn `*.default=true` werden die entsprechenden Listen `*.ids` ignoriert. D.h. sie dürfen unter Anderem auch leer sein. 
+### General validation rules
 
-* **Umgang mit default IDs in den Listen `*.ids`**
+These checks are independent of the operating mode:
 
-    Wenn `new.default=false` gilt:
+* `dev_no` must be unique within each list
 
-    * Default IDs sind in der Liste `new.ids` erlaubt, solange sie nicht doppelt vorkommen. 
+* for each device: `cmd_id != answer_id`
 
-    Wenn `current.default=false` gilt:
+* default IDs must not be identical:
 
-    * Default IDs sind in der Liste `current.ids` erlaubt. Sie dürfen auch doppelt vorkommen. (Siehe **Eindeutigkeit der CAN-ID-Zahlen innerhalb einer Liste**)
+    * `default_cmd_id != default_ans_id`
 
-* **Unbekannte Geräte**
+* required lists must not be empty:
 
-    In der Liste `current.ids` kann es pro Gerät einen Eintrag `unknown=true` geben. Dabei gilt:
+    * if `new.default=false`, then `new.ids` must not be empty
 
-    * Es wird trotzdem versucht, das Gerät umzustellen.
+    * if `current.default=false`, then `current.ids` must not be empty
 
-    * Es gibt lediglich eine **Warnung** mit dem Hinweis, das Gerät über USB anzuschließen und die CAN ID mit GSVmulti zu suchen. 
+* if `*.default=true`, the corresponding `*.ids` list is ignored and may be empty
 
-* **Baudrate**
+* unknown devices may be marked using `unknown: true` in `current.ids`
 
-    Die Default Baudrate wird in `devices.config.assign.default_canbaud` konfiguriert. 
+* baudrate handling depends on the case and configuration
+
+
+**CAN ID uniqueness rules**
+
+
+* If `new.default=false`:
+
+    * target IDs in `new.ids` must be strictly unique
+
+    * no number may occur twice across `cmd_id` and `answer_id`
+
+* If `current.default=false`:
+
+    * duplicates in `current.ids` are allowed because only one device is connected at a time during the process 
+
+* If `*.default=true`:
+
+    * duplicate IDs in the corresponding current/default start state are allowed
     
-    Falls `current.default=true`:
+    * but still cmd_id != answer_id must hold per device
+
+ 
+
+**Baudrate rules**
+
+The default baudrate is configured in: 
+
+* `devices.config.assign.default_canbaud`
+
     
-    * Die Geräte besitzen die Default Baudrate und diese wird zum Aktivieren der Geräte verwendet.
+If `current.default=true`:
     
-    Falls `current.default=false`:
+* the device is assumed to use the default baudrate
 
-    * Die Devices können in `current.ids` mit einem Eintrag `canbaud` konfiguriert werden (optional). 
     
-    * Wenn Sie keinen Eintrag `canbaud` besitzen, wird als Fallback die Baudrate in `dll.canbaud` verwendet. 
+If `current.default=false`:
 
-    * Bei `new.default=true` wird die Baudrate wieder auf die Default Baudrate gesetzt.
+* devices may optionally define `canbaud` in `current.ids` 
+    
+* if missing, `dll.canbaud` is used as fallback 
 
-    * Bei `new.default=false` wird die CAN Baudrate auf die Baudrate in `dll.canbaud` umgestellt.
+If `new.default=true`:
 
+* baudrate is changed back to the default baudrate
 
-     
+If `new.default=false`:
 
-### Case 1: `current.default=false` & `new.default=false`
+* baudrate is changed to `dll.canbaud`
 
-**“Normalbetrieb”** – Umstellung mit Mapping **per dev_no** oder **per serial**.
 
-#### Zweck
+### Case-specific rules
 
-* Alle Geräte sind schon mit (eindeutigen) `current.ids` erreichbar.
+**Case 1: `current.default=false` & `new.default=false`**
 
-* Die Geräte sollen auf eindeutige `new.ids` umgestellt werden.
+* `current.ids` and `new.ids` must contain the same `dev_no` 
 
-* Der Run darf **partial/no-op** sein: einzelne Geräte können unverändert bleiben.
+* SN mode mixed configuration is not allowed:
 
-* **Sicherheitsregel**: Auch wenn die Liste `currrent.ids` eindeutige CAN IDs enthält, können wir nicht wissen, ob diese auch korrekt sind. Daher: Es darf erstmal immer nur jeweils ein Gerät am Bus sein. Wenn man sicher ist, dass die eindeutige Liste korrekt ist (z.B. nach einer bereits erfolgreichen Umstellung) können die Geräte auch gleichzeitig am Bus sein. 
+    * if one entry in `new.ids` has `serial`, all must have `serial`
 
-#### Zusätzliche Konfigurationsfehler (Case 1) (Ergänzung zu "Allgemeine Regeln" oben)
+* duplicate serial numbers in `new.ids` are not allowed
 
+* invalid serial numbers (`< 0`) are not allowed
 
-1. Mapping über `dev_no`: `current.ids`und `new.ids` **enthalten nicht die gleichen dev_no**
 
-    Beispiel: `current` hat 1,2,3 aber `new` hat 1,2,4.
 
-2. **SN-Mode: Mischbetrieb ist verboten**
 
-    Wenn irgendein Eintrag in `new.ids` `serial` hat, dann müssen **alle** Einträge `serial` haben.
+**Allowed in Case 1:**
 
-3. **SN-Mode: Seriennummern kommen mehrfach vor** (müssen eindeutig sein)
+* duplicate current IDs are allowed
 
-4. **SN-Mode: ungültige Serial (<0)**
+* partial / no-op devices are allowed (`new == current`) 
 
-#### Erlaubt in Case 1
+* `current.ids` may contain `serial` or `canbaud`
 
-* ✅ Die current IDs dürfen doppelt vorkommen, da wir alle Geräte einzeln anschließen.
+* `new.ids` may contain `serial`
 
-* ✅ **Partial / No-Op:** Für ein Gerät darf gelten `new == current` (gleiche IDs), d.h. es wird effektiv nicht umgestellt.
+* mapping can happen by `dev_no` or `serial` 
 
-* ✅ `current.ids` darf `serial` enthalten (wird für Checks / Logging genutzt).
 
-* ✅ `new.ids` darf `serial` enthalten. **Mapping passiert über** `dev_no` oder `serial`.
 
-* ✅ Eine CAN ID, die in der Liste `current.ids` bereits existiert, darf Ziel ID eines anderen Gerätes sein, solange die Eindeutigkeit in der Liste `new.ids` erfüllt bleibt. 
 
 
+**Case 2: `current.default=true` & `new.default=false`**
 
 
+* SN mode mixed configuration is not allowed:
 
-### Case 2: `current.default=true` & `new.default=false`
+    * if one entry in `new.ids` has `serial`, all must have `serial`
 
-Geräte sind (noch) auf Default IDs und müssen **einzeln** umgestellt werden.
+* duplicate serial numbers in `new.ids` are not allowed
 
-#### Zweck
+* invalid serial numbers (`< 0`) are not allowed
 
-* Geräte werden einzeln angeschlossen (weil alle dieselben Default-IDs haben).
+**Allowed in Case 2:**
 
-* Ziel-IDs kommen aus `new.ids`.
+* `current.ids` may be empty
 
-* Optional kann **SN-Mapping** genutzt werden (wenn in `new.ids` überall serial gesetzt ist).
+* new.ids may work with or without serial numbers
 
 
 
-#### Zusätzliche Konfigurationsfehler (Case 2) (Ergänzung zu "Allgemeine Regeln" oben)
 
 
-1. **Default-IDs sind ungültig konfiguriert**
 
-    `default_cmd_id == default_ans_id` → verboten.
+**Case 3: `current.default=false` & `new.default=true`**
 
-2. **SN-Mode: Mischbetrieb ist verboten**
 
-    Wenn irgendein Eintrag in `new.ids` `serial` hat, dann müssen **alle** Einträge `serial` haben.
 
-3. **SN-Mode: Seriennummern kommen mehrfach vor** (müssen eindeutig sein)
+**Allowed in Case 3**
 
-4. **SN-Mode: ungültige Serial (<0)**
+* duplicate current IDs are allowed
 
-#### Erlaubt in Case 2
+* `new.ids` may be empty and is ignored
 
-* ✅ `current.ids` darf leer sein (wird nicht benötigt)
+* `new.ids` may contain serials or not, it is ignored
 
-* ✅ `new.ids` kann **ohne** `serial` betrieben werden → Mapping per `dev_no`
+* `current.ids` may contain serials or canbauds
 
-* ✅ `new.ids` kann **mit** `serial` betrieben werden → Mapping per `serial` (SN_MODE=true)
 
-* ✅ Doppelte Default-IDs sind im Startzustand ok (weil `current.default=true`), aber **nie** in den Ziel-IDs.
+## Notes
 
+StartupCAN is designed for controlled, reproducible CAN setup workflows.
 
+Even if the YAML contains unique current IDs, StartupCAN still assumes that the actual bus state may differ. Therefore, the safest operating rule is:
 
-
-### Case 3: `current.default=false` & `new.default=true`
-
-**Forced Reset Wizard** – Geräte werden auf Default IDs zurückgesetzt und müssen danach **vom Bus abgenommen werden**.
-
-#### Zweck
-
-* Geräte haben (eindeutige) `current.ids`.
-
-* Jedes Gerät wird nacheinander auf Default zurückgesetzt.
-
-* Sobald ein Gerät Default ist, darf es **nicht** am Bus bleiben (sonst ID-Kollision).
-
-* **Sicherheitsregel**: Auch wenn die Liste `currrent.ids` eindeutige CAN IDs enthält, können wir nicht wissen, ob diese auch korrekt sind. Daher: Es darf erstmal immer nur jeweils ein Gerät am Bus sein. Wenn man sicher ist, dass die eindeutige Liste korrekt ist (z.B. nach einer bereits erfolgreichen Umstellung) können die Geräte auch gleichzeitig am Bus sein. 
-
-
-
-#### Zusätzliche Konfigurationsfehler (Case 3) (Ergänzung zu "Allgemeine Regeln" oben)
-
-
-1. **Default-IDs sind ungültig konfiguriert**
-
-    `default_cmd_id == default_ans_id` → verboten.
-
-#### Erlaubt in Case 3
-
-* ✅ Die current IDs dürfen doppelt vorkommen, da wir alle Geräte einzeln anschließen.
-
-* ✅ `new.ids` darf leer sein und wird ignoriert.
-
-* ✅ `new.ids` darf `serial` enthalten oder nicht – wird ignoriert.
-
-* ✅ `current.ids` darf `serial` enthalten (wird für Check/Logging genutzt).
+**Only one device at a time should be connected during reconfiguration.**
