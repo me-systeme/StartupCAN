@@ -1,18 +1,26 @@
 """
-startupcan.py
+main.py
 
-Headless startup/scanner for GSV86CAN devices.
+Headless CAN startup and reconfiguration tool for GSV CAN devices.
 
-Modes:
-- DEFAULT_MODE = true:
-  Wizard flow: devices must be connected ONE BY ONE (because they share default CAN IDs).
-  For each dev_no from DEVICE_CONFIG (derived from YAML 'new' list):
-    1) Ask user to connect exactly one amplifier
-    2) activate() using DEFAULT_CMD_ID / DEFAULT_ANS_ID
-    3) set IDs to YAML 'new' IDs for this dev_no
-    4) reset + release + activate again using new IDs
-    5) print summary
+StartupCAN configures devices over the CAN bus based on a YAML configuration
+that defines the current device state (`current.ids`) and the desired target
+state (`new.ids`). Devices are processed one by one and the detected final
+state is written to `config.updated.yaml`.
 
+Operating modes (defined by `current.default` and `new.default`):
+
+1) Device Update (current.default=false, new.default=false)
+   Reassign devices from `current.ids` to `new.ids`.
+
+2) Default Mode (current.default=true, new.default=false)
+   Devices start with default CAN settings and are configured to `new.ids`.
+
+3) Forced Reset Wizard (current.default=false, new.default=true)
+   Devices are reset from `current.ids` back to default CAN settings.
+
+For safety, devices are always processed individually to avoid CAN ID
+collisions on the bus.
 """
 
 import sys
@@ -36,49 +44,96 @@ from startupcan.ui import _warn_unknown
 
 
 def main() -> int:
+    """
+    Main entry point for the StartupCAN wizard.
+
+    High-level flow:
+    1) Initialize DLL access
+    2) Validate the selected YAML mode
+    3) Print warnings / run information
+    4) Build the run configuration for the active case
+    5) Process devices one by one
+    6) Write config.updated.yaml with the detected final state
+    7) Safely release all remaining active handles on shutdown
+    """
     gsv = GSV86CAN()
     results = []
 
     try:
+        # ------------------------------------------------------------------
+        # Check whether the DLL is reachable before doing anything else.
+        # If this fails, there is no point in continuing.
+        # ------------------------------------------------------------------
         try:
             v = gsv.dll_version()
             print(f"[INFO] DLL Version: {v}")
         except Exception as e:
-            print(f"[FAIL] DLL Version konnte nicht gelesen werden: {e}")
+            print(f"[FAIL] Could not read DLL version: {e}")
             return 2
 
+        # ------------------------------------------------------------------
+        # Print the selected mode from the YAML configuration.
+        # These two flags define which startup/reset workflow is used.
+        # ------------------------------------------------------------------
         print(f"[INFO] current.default = {CURRENT_DEFAULT_MODE}")
         print(f"[INFO] new.default     = {NEW_DEFAULT_MODE}")
 
         if CURRENT_DEFAULT_MODE and NEW_DEFAULT_MODE:
-            print("[FAIL] Ungültige Konfiguration: current.default=true und new.default=true ist nicht erlaubt.")
+            print("[FAIL] Invalid configuration: current.default=true and new.default=true is not allowed.")
             return 2
         
         print(f"[INFO] Devices in config: {len(DEVICE_CONFIG)}")
         print("-" * 80)
 
+        # ------------------------------------------------------------------
+        # Warn the user if current.ids already contains unknown=true entries.
+        # This does not stop the run, but it is an important diagnostic hint.
+        # ------------------------------------------------------------------
         unknown_in_yaml = [d for d in (DEVICE_CONFIG or []) if isinstance(d, dict) and d.get("unknown")]
         if unknown_in_yaml:
             print("\n" + "!" * 80)
-            print("[WARN] In current.ids sind Geräte mit unknown=true markiert.")
+            print("[WARN] Some devices in current.ids are marked with unknown=true.")
             for d in unknown_in_yaml:
                 dev_no = int(d["dev_no"])
                 serial = d.get("serial")
                 _warn_unknown(dev_no, int(serial) if serial is not None else None, where="yaml-current.ids")
             print("!" * 80 + "\n")
 
-        print("\nWICHTIG (Umstellung auf neue CAN Settings):")
-        print("- Es darf immer nur ein Gerät am Bus sein (damit es nicht zur Kollision kommt).")
-        print("- Nach jedem Schritt Gerät abnehmen (immer nur eins am Bus).")
-        print("  bevor du das nächste Gerät bearbeitest.")
+        # ------------------------------------------------------------------
+        # General safety note:
+        # even if devices currently have unique IDs, this tool processes them
+        # one by one to avoid bus collisions and configuration ambiguity.
+        # ------------------------------------------------------------------
+        print("\nIMPORTANT (switching CAN settings):")
+        print("- Only ONE device may be connected to the CAN bus at a time.")
+        print("- Remove the device after each step.")
+        print("- Only then continue with the next device.")
 
+        # ------------------------------------------------------------------
+        # Build the case-specific runtime configuration.
+        # This includes:
+        # - intro text
+        # - continue prompt
+        # - whether serial validation is required
+        # - whether target IDs are resolved after activate()
+        # - how the final YAML should be written
+        # ------------------------------------------------------------------
         run_cfg = _build_run_config()
 
         for line in run_cfg.intro_lines:
             print(line)
 
+        # ------------------------------------------------------------------
+        # Main device loop:
+        # Each device is handled as an isolated step.
+        # The low-level activation / validation / programming logic lives in
+        # _run_device_step().
+        # ------------------------------------------------------------------
         for d in DEVICE_CONFIG:
-
+            # Build the plan for this device:
+            # - device number
+            # - start endpoint (old/default)
+            # - target endpoint (new/default)
             plan, expected_sn = _build_device_plan(d)
 
             _run_device_step(
@@ -90,15 +145,32 @@ def main() -> int:
                 validate_expected_serial=run_cfg.validate_expected_serial,
             )
             
+            # Ask the user whether the next device should be processed.
             if not _ask_continue(run_cfg.continue_prompt):
                 break
         
+        # ------------------------------------------------------------------
+        # Determine the final current.default value for config.updated.yaml.
+        #
+        # Case 2: current.default=true  -> remains true only if all processed
+        #         devices effectively stayed in default mode / were not changed.
+        #
+        # Case 3: new.default=true      -> current.default becomes true only if
+        #         all devices were successfully reset to default.
+        #
+        # Case 1: normal re-addressing  -> current.default is always false.
+        # ------------------------------------------------------------------
         if CURRENT_DEFAULT_MODE:
             current_default = _all_fail(results, len(DEVICE_CONFIG))
         elif NEW_DEFAULT_MODE:
             current_default = _all_ok(results, len(DEVICE_CONFIG))
         else:
             current_default = False
+        
+        # ------------------------------------------------------------------
+        # Write config.updated.yaml based on the detected final states.
+        # This also prints the summary and success/warning message.
+        # ------------------------------------------------------------------
         return _finalize_run_and_write_yaml(
             results=results,
             base_current_ids=run_cfg.base_current_ids,
@@ -108,6 +180,11 @@ def main() -> int:
         )
 
     finally:
+        # ------------------------------------------------------------------
+        # Last-resort cleanup:
+        # release every device handle that is still marked as active.
+        # This protects against leaving stale DLL/device sessions behind.
+        # ------------------------------------------------------------------
         for dev_no, active in list(HANDLE_ACTIVE.items()):
             if active:
                 _safe_release(gsv, dev_no, where="shutdown")

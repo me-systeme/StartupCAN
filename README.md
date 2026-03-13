@@ -19,6 +19,19 @@ StartupCAN is useful when you want to:
 The tool is especially useful in production, commissioning, service, or recovery workflows where devices are connected over CAN and should be handled one by one in a controlled and reproducible way.
 
 
+## Advantages
+
+StartupCAN has several practical advantages:
+
+- fully scriptable and reproducible workflow
+- YAML-based source of truth for current and target CAN settings
+- automatic creation of `config.updated.yaml`
+- supports partial success and interrupted runs
+- detects and records uncertain states via state probing
+- well-structured error handling with clear logs for diagnosis and recovery
+- supports mapping by `dev_no` or by `serial`
+
+
 ## Workflow overview
 
 ```mermaid
@@ -42,18 +55,6 @@ flowchart TD
 ``` 
 
 
-
-## Advantages
-
-StartupCAN has several practical advantages:
-
-- fully scriptable and reproducible workflow
-- YAML-based source of truth for current and target CAN settings
-- automatic creation of `config.updated.yaml`
-- supports partial success and interrupted runs
-- detects and records uncertain states via state probing
-- well-structured error handling with clear logs for diagnosis and recovery
-- supports mapping by `dev_no` or by `serial`
 
 
 ## Requirements

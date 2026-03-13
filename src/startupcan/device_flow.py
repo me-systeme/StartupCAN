@@ -1,3 +1,18 @@
+"""
+device_flow.py
+
+Per-device execution flow for StartupCAN.
+
+This module contains the step-by-step workflow for processing a single device:
+activate the device, optionally resolve/check serial-based target settings,
+verify the current endpoint, apply new CAN settings, probe fallback states on
+failure, and record the result.
+
+It is responsible for robust device-level error handling, state probing, and
+safe disconnect/release behavior after each device step.
+"""
+
+
 from startupcan.models import DevicePlan
 from startupcan.gsv86can import GSV86CAN
 from startupcan.device_ops import (
@@ -26,21 +41,22 @@ def _activate_or_record_failure(
     fail_message: str = "Activation failed.",
 ) -> tuple[bool, int | None, bool, bool, str]:
     """
-    Führt initiales activate() aus.
-    Wenn activate fehlschlägt:
-      - state probe / unknown handling
-      - results append
-      - skip_programming=True
-    Wenn activate erfolgreich:
-      - nur ok/sn zurück, keine Ergebniszeile
+    Perform the initial device activation.
+
+    If activation fails:
+    - perform a state probe if possible
+    - record the failure in results
+    - skip the programming step
 
     Returns:
-        ok,
-        sn,
-        already_recorded,
-        skip_programming,
+        ok
+        sn
+        already_recorded
+        skip_programming
         disconnect_reason
     """
+
+    # Try to activate the device using the current endpoint
     ok, sn = _try_activate(
         gsv,
         plan.dev_no,
@@ -53,21 +69,19 @@ def _activate_or_record_failure(
     )
 
     if ok:
-        return (
-            True,
-            sn,
-            False,   # already_recorded
-            False,   # skip_programming
-            "",
-        )
+        # Activation successful → continue workflow
+        return True, sn, False, False, ""
+        
 
-    # activate fehlgeschlagen
+    # Activation failed
+    # If target endpoint is unknown we cannot probe new endpoint
     if plan.cmd_new is None or plan.ans_new is None:
         state = "unknown"
         fail_plan = plan.with_safe_new_ids()
     else:
         fail_plan = plan
 
+        # Try to determine which endpoint is currently active
         state = _probe_state_after_fail(
             gsv,
             fail_plan.dev_no,
@@ -79,6 +93,7 @@ def _activate_or_record_failure(
             baud_new=fail_plan.baud_new,
         )
 
+    # Record the failure result
     _record_result(
         results=results,
         dev_no=fail_plan.dev_no,
@@ -95,13 +110,7 @@ def _activate_or_record_failure(
         warn_where=warn_where,
     )
 
-    return (
-        False,
-        sn,
-        True,   # already_recorded
-        True,   # skip_programming
-        f"{fail_message} State probe={state}. Gerät abnehmen.",
-    )
+    return False, sn, True, True, f"{fail_message} State probe={state}. Remove device."
 
 def _resolve_target_ids_after_activate(
     *,
@@ -109,40 +118,40 @@ def _resolve_target_ids_after_activate(
     plan: DevicePlan,
     sn: int | None,
     fail_state: str = "old",
-    fail_message: str = "FEHLER: Ziel-IDs konnten nicht bestimmt werden. Dieses Gerät wird übersprungen.",
+    fail_message: str = "ERROR: Target IDs could not be determined. Device will be skipped.",
 ) -> tuple[DevicePlan, bool, bool, str]:
     """
-    Wird NACH erfolgreichem activate() aufgerufen.
+    Resolve target IDs after activation.
 
-    Verhalten:
-    - SN_MODE=False:
-        cmd_new/ans_new müssen bereits gesetzt sein -> einfach zurückgeben
-    - SN_MODE=True:
-        target IDs werden per SN bestimmt
+    Behavior:
+    - SN_MODE=False → target IDs already defined by dev_no
+    - SN_MODE=True → resolve target IDs based on serial number
 
     Returns:
-        plan,
-        already_recorded,
-        skip_programming,
+        DevicePlan
+        already_recorded
+        skip_programming
         disconnect_reason
     """
-    # SN_MODE=False => target wurde vorher schon per dev_no bestimmt
+
+    # When SN_MODE is disabled, target IDs must already exist
     if not SN_MODE:
         if plan.cmd_new is None or plan.ans_new is None:
-            raise ValueError(f"SN_MODE=False, aber cmd_new/ans_new fehlen für dev_no={plan.dev_no}")
+            raise ValueError(f"SN_MODE=False but target IDs missing for dev_no={plan.dev_no}")
         return plan, False, False, ""
 
-    # SN_MODE=True => target jetzt per Seriennummer bestimmen
+    # Resolve target IDs based on serial number
     try:
         cmd_new, ans_new = _target_ids(plan.dev_no, sn)
-        print(f"[{_fmt_dev(plan.dev_no, sn)}] Ziel-IDs per SN-Mapping.")
+        print(f"[{_fmt_dev(plan.dev_no, sn)}] Target IDs resolved via serial mapping.")
         return plan.with_new_ids(cmd_new, ans_new), False, False, ""
 
     except KeyError as e:
-        print(f"[{_fmt_dev(plan.dev_no, sn)}] FEHLER: {e}")
+        print(f"[{_fmt_dev(plan.dev_no, sn)}] ERROR: {e}")
 
         fail_plan = plan.with_safe_new_ids()
 
+        # Record failure
         _record_result(
             results=results,
             dev_no=fail_plan.dev_no,
@@ -165,25 +174,18 @@ def _validate_expected_serial(
     plan: DevicePlan,
     expected_sn: int | None,
     sn: int | None,
-    serial_missing_message: str = "Die Seriennummer konnte nicht gelesen werden.",
-    serial_mismatch_message: str = (
-        "Die gelesene Seriennummer stimmt nicht mit der konfigurierten Seriennummer "
-        "aus dem YAML überein. Die Seriennummer aus dem YAML wird im neuen YAML "
-        "mit der gelesenen Seriennummer überschrieben."
-    ),
+    serial_missing_message: str = "Serial number could not be read.",
+    serial_mismatch_message: str = "Serial mismatch.",
 ) -> tuple[bool, bool, str]:
     """
-    Prüft erwartete Seriennummer aus YAML gegen gelesene Seriennummer.
+    Validate the expected serial number from YAML.
 
-    Verhalten:
-    - expected_sn is None -> keine Prüfung, alles OK
-    - sn is None -> Fail append
-    - sn != expected_sn -> Fail append
-    - sonst OK
+    If the serial number cannot be read or does not match the expected value,
+    the device is not reconfigured and the result is recorded as failure.
 
     Returns:
-        already_recorded,
-        skip_programming,
+        already_recorded
+        skip_programming
         disconnect_reason
     """
     if expected_sn is None:
@@ -193,30 +195,8 @@ def _validate_expected_serial(
 
     if sn is None:
         print(
-            f"[DEV {safe_plan.dev_no}] FEHLER: YAML erwartet SN={expected_sn}, "
-            "aber Seriennummer konnte nicht gelesen werden. => Device wird NICHT umgestellt."
-        )
-
-        _record_result(
-            results=results,
-            dev_no=safe_plan.dev_no,
-            sn=sn,
-            ok=False,
-            state="old",
-            cmd_old=safe_plan.cmd_old,
-            ans_old=safe_plan.ans_old,
-            cmd_new=safe_plan.cmd_new,
-            ans_new=safe_plan.ans_new,
-            baud_old=safe_plan.baud_old,
-            baud_new=safe_plan.baud_new,
-        )
-        print("-" * 80)
-        return True, True, serial_missing_message
-
-    if int(expected_sn) != int(sn):
-        print(
-            f"[{_fmt_dev(plan.dev_no, sn)}] FEHLER: Die gelesene Seriennummer {sn} passt nicht zu YAML "
-            f"(yaml SN={expected_sn}). => Device wird NICHT umgestellt."
+            f"[DEV {safe_plan.dev_no}] ERROR: YAML expects SN={expected_sn}, "
+            "but serial number could not be read."
         )
 
         _record_result(
@@ -233,7 +213,29 @@ def _validate_expected_serial(
             baud_new=safe_plan.baud_new,
         )
         
-        print("-" * 80)
+        return True, True, serial_missing_message
+
+    if int(expected_sn) != int(sn):
+        print(
+            f"[{_fmt_dev(plan.dev_no, sn)}] ERROR: serial mismatch "
+            f"(expected {expected_sn}, got {sn})."
+        )
+
+        _record_result(
+            results=results,
+            dev_no=safe_plan.dev_no,
+            sn=sn,
+            ok=False,
+            state="old",
+            cmd_old=safe_plan.cmd_old,
+            ans_old=safe_plan.ans_old,
+            cmd_new=safe_plan.cmd_new,
+            ans_new=safe_plan.ans_new,
+            baud_old=safe_plan.baud_old,
+            baud_new=safe_plan.baud_new,
+        )
+        
+        
         return True, True, serial_mismatch_message
 
     return False, False, ""
@@ -244,12 +246,11 @@ def _handle_skip_if_same_endpoint(
     plan: DevicePlan,
     sn: int | None,
     state_on_skip: str = "old",
-    print_message: str = "Ziel-IDs entsprechen bereits dem aktuellen Zustand. Skip umstellen.",
-    disconnect_message: str = "OK (skip). Bitte Gerät abnehmen.",
+    print_message: str = "Device already has target CAN settings.",
+    disconnect_message: str = "OK (skip). Remove device.",
 ) -> tuple[bool, bool, str]:
     """
-    Wenn alter und neuer Endpoint identisch sind, wird der Schritt als erfolgreich
-    übersprungen und direkt in results eingetragen.
+    Skip reconfiguration if the device already has the target endpoint.
 
     Returns:
         already_recorded,
@@ -294,17 +295,18 @@ def _apply_target_or_record_result(
     failure_message: str,
 ) -> tuple[int | None, bool, bool, str]:
     """
-    Programmiert Ziel-IDs/Ziel-Baud, reaktiviert, bestimmt den effektiven state
-    und schreibt das Ergebnis direkt nach results.
+    Apply the target CAN settings, reactivate, verify effective state and record the result.
 
     Returns:
-        sn_out,
+        sn,
         already_recorded,
         skip_programming,
         disconnect_reason
     """
+
     if plan.cmd_new is None or plan.ans_new is None:
-        raise ValueError(f"plan.cmd_new/ans_new fehlen für dev_no={plan.dev_no}")
+        raise ValueError(f"Missing target IDs for dev_no={plan.dev_no}")
+    
     ok2, sn2 = _apply_target_and_reconnect(
         gsv,
         plan.dev_no,
@@ -316,6 +318,7 @@ def _apply_target_or_record_result(
 
     sn_out = sn2 if sn2 is not None else sn
 
+    # Determine resulting state
     state = "new" if ok2 else _probe_state_after_fail(
         gsv,
         plan.dev_no,
@@ -354,19 +357,24 @@ def _handle_keyboard_interrupt(
     plan: DevicePlan,
     sn: int | None,
     already_recorded: bool,
-    disconnect_message: str = "⏭️ Abbruch (Ctrl+C) im Device-Step. Gerät wird freigegeben. Bitte abnehmen.",
-    warn_where: str = "Abbruch (Ctrl+C)",
+    disconnect_message: str = "⏭️ Aborted (Ctrl+C) during device step. Device will be released and must be removed.",
+    warn_where: str = "KeyboardInterrupt (Ctrl+C)",
 ) -> tuple[bool, str]:
     """
-    Einheitliches Handling für Ctrl+C im Device-Step.
+    Handle Ctrl+C during a device step.
+
+    Behavior:
+    - release the current device safely
+    - record an 'unknown' result if nothing has been recorded yet
 
     Returns:
         already_recorded,
         disconnect_reason
     """
     disconnect_reason = disconnect_message
-
     safe_plan = plan.with_safe_new_ids()
+
+    # Best-effort release before leaving the device step.
     _safe_release(gsv, safe_plan.dev_no, where="device-step/Ctrl+C")
 
     if not already_recorded:
@@ -398,14 +406,19 @@ def _device_fail(
     where: str,
 ) -> str:
     """
-    Einheitliches Fehlerhandling pro Device:
-    - prints
-    - state probe (best effort)
-    - results append
-    - returns disconnect_reason
+    Handle an unexpected exception during a device step.
+
+    Behavior:
+    - print the error
+    - probe the effective device state if possible
+    - record the result as failure
+    - return a disconnect message
+
+    Returns:
+        disconnect_reason
     """
     safe_plan = plan.with_safe_new_ids()
-    print(f"[DEV {safe_plan.dev_no}] FEHLER ({where}): {err}")
+    print(f"[DEV {safe_plan.dev_no}] ERROR ({where}): {err}")
 
     state = "unknown"
     try:
@@ -420,7 +433,7 @@ def _device_fail(
             baud_new=safe_plan.baud_new,
         )
     except Exception as e2:
-        print(f"[DEV {safe_plan.dev_no}] WARN: state-probe failed: {e2}")
+        print(f"[DEV {safe_plan.dev_no}] WARN: state probe failed: {e2}")
 
     _record_result(
         results=results,
@@ -435,10 +448,10 @@ def _device_fail(
         baud_old=safe_plan.baud_old,
         baud_new=safe_plan.baud_new,
         warn_unknown=True,
-        warn_where=f"{where}/state-probe",
+        warn_where=f"{where}/state probe",
     )
 
-    return f"FEHLER: {err} (state={state}). Bitte Gerät abnehmen."
+    return f"ERROR: {err} (state={state}). Remove device."
 
 def _run_device_step(
     *,
@@ -450,14 +463,30 @@ def _run_device_step(
     validate_expected_serial: bool,
 ) -> None:
 
+    """
+    Execute the full workflow for one device.
+
+    Steps:
+    1) ask the user to connect exactly one device
+    2) activate using the start endpoint
+    3) optionally resolve target IDs after activation
+    4) optionally validate the serial number
+    5) verify the current endpoint (best effort)
+    6) skip if the current endpoint already equals the target endpoint
+    7) otherwise apply the target CAN settings
+    8) always disconnect and release the device safely
+    """
+
     sn = None
     already_recorded = False
     skip_programming = False
-    disconnect_reason = "Weiter mit nächstem Gerät."
+    disconnect_reason = "Continue with next device."
 
     try:
+        # Prompt the user to connect the device physically.
         _connect_one(plan.dev_no)
 
+        # Step 1: activate the device using the start endpoint.
         _, sn, already_recorded, skip_programming, disconnect_reason = _activate_or_record_failure(
             gsv=gsv,
             results=results,
@@ -469,6 +498,7 @@ def _run_device_step(
             fail_message="Activation failed.",
         )
 
+        # Step 2.1: resolve target IDs after activation if required.
         if not skip_programming and resolve_target_after_activate:
             plan, already_recorded, skip_programming, disconnect_reason = _resolve_target_ids_after_activate(
                 results=results,
@@ -478,6 +508,7 @@ def _run_device_step(
                 fail_message="FEHLER: Ziel-IDs konnten nicht bestimmt werden. Dieses Gerät wird übersprungen.",
             )
 
+        # Step 2.2: validate the serial number if required.
         if not skip_programming and validate_expected_serial:
             already_recorded, skip_programming, disconnect_reason = _validate_expected_serial(
                 results=results,
@@ -486,11 +517,14 @@ def _run_device_step(
                 sn=sn,
             )
 
+        # Step 3: verify the current endpoint.
+        # Verification failure is only a warning and does not stop the workflow.
         if not skip_programming:
             ok = _verify_ids(gsv, plan.dev_no, sn, plan.cmd_old, plan.ans_old, plan.baud_old)
             if not ok:
                 print(f"[{_fmt_dev(plan.dev_no, sn)}] WARN: Start-IDs stimmen nicht (trotz activation).")
 
+        # Step 4: skip the programming step if the device already has the target settings.
         if not skip_programming:
             already_recorded, skip_programming, disconnect_reason = _handle_skip_if_same_endpoint(
                 results=results,
@@ -501,6 +535,7 @@ def _run_device_step(
                 disconnect_message="OK (skip). Bitte Gerät abnehmen.",
             )
 
+        # Step 5: apply the target settings if still required.
         if not skip_programming:
             sn, already_recorded, skip_programming, disconnect_reason = _apply_target_or_record_result(
                 gsv=gsv,
@@ -512,6 +547,7 @@ def _run_device_step(
             )
 
     except KeyboardInterrupt:
+        # Handle Ctrl+C in a controlled way for the current device.
         already_recorded, disconnect_reason = _handle_keyboard_interrupt(
             gsv=gsv,
             results=results,
@@ -521,6 +557,7 @@ def _run_device_step(
         )
 
     except Exception as e:
+        # Handle unexpected device-level errors.
         if not already_recorded:
             disconnect_reason = _device_fail(
                 gsv=gsv,
@@ -531,9 +568,10 @@ def _run_device_step(
                 where="Exception",
             )
         else:
-            disconnect_reason = f"FEHLER nach Ergebnis-Append: {e}. Bitte Gerät abnehmen."
+            disconnect_reason = f"ERROR after result recording: {e}. Remove device."
 
     finally:
+        # Always ask the user to disconnect the device and release resources.
         try:
             _disconnect_one(gsv, plan.dev_no, sn, reason=disconnect_reason)
         except KeyboardInterrupt:
