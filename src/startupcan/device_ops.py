@@ -14,7 +14,7 @@ used by the higher-level device flow logic.
 
 import time
 
-from startupcan.config import CANBAUD
+from startupcan.config import CANBAUD, NEW_DEFAULT_MODE
 from startupcan.gsv86can import (
     GSV86CAN,
     CANSET_CAN_IN_CMD_ID,
@@ -204,6 +204,11 @@ def _apply_target_and_reconnect(
                   f"(expected CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)}).")
 
         time.sleep(0.1)
+
+        if NEW_DEFAULT_MODE:
+            print(f"[{_fmt_dev(dev_no, serial)}] Loading factory default settings...")
+
+            gsv.load_settings(dev_no, dataset_no=1)
 
         return ok_verify, sn_out
     

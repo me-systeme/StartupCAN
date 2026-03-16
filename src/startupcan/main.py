@@ -57,11 +57,24 @@ def main() -> int:
     6) Write config.updated.yaml with the detected final state
     7) Safely release all remaining active handles on shutdown
     """
-    parser = argparse.ArgumentParser(description="StartupCAN")
+    parser = argparse.ArgumentParser(
+        prog="StartupCAN",
+        description=(
+            "StartupCAN – headless CAN startup and reconfiguration tool for GSV CAN devices.\n"
+            "Reads config.yaml and writes the detected device state to config.updated.yaml.\n"
+            "Devices are processed one by one via a guided CLI workflow."
+        ),
+        epilog=(
+        "Examples:\n"
+        "  python run.py\n"
+        "  python run.py --in-place"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument(
         "--in-place",
         action="store_true",
-        help="Overwrite config.yaml instead of writing config.updated.yaml"
+        help="Update config.yaml directly instead of writing config.updated.yaml"
     )
 
     args = parser.parse_args()

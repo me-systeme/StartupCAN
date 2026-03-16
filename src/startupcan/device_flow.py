@@ -505,7 +505,7 @@ def _run_device_step(
                 plan=plan,
                 sn=sn,
                 fail_state="old",
-                fail_message="FEHLER: Ziel-IDs konnten nicht bestimmt werden. Dieses Gerät wird übersprungen.",
+                fail_message="ERROR: Target CAN IDs could not be determined. This device will be skipped.",
             )
 
         # Step 2.2: validate the serial number if required.
@@ -522,7 +522,7 @@ def _run_device_step(
         if not skip_programming:
             ok = _verify_ids(gsv, plan.dev_no, sn, plan.cmd_old, plan.ans_old, plan.baud_old)
             if not ok:
-                print(f"[{_fmt_dev(plan.dev_no, sn)}] WARN: Start-IDs stimmen nicht (trotz activation).")
+                print(f"[{_fmt_dev(plan.dev_no, sn)}] WARN: Start CAN IDs do not match (despite successful activation).")
 
         # Step 4: skip the programming step if the device already has the target settings.
         if not skip_programming:
@@ -531,8 +531,8 @@ def _run_device_step(
                 plan=plan,
                 sn=sn,
                 state_on_skip="new",
-                print_message="Gerät hat bereits die Ziel-CAN-Settings.",
-                disconnect_message="OK (skip). Bitte Gerät abnehmen.",
+                print_message="The device already has the target CAN settings.",
+                disconnect_message="OK (skipped). Please remove the device.",
             )
 
         # Step 5: apply the target settings if still required.
@@ -542,8 +542,8 @@ def _run_device_step(
                 results=results,
                 plan=plan,
                 sn=sn,
-                success_message="✅ OK: Gerät wurde auf die neuen CAN settings umgestellt. Bitte abnehmen.",
-                failure_message="FEHLER: Umstellung fehlgeschlagen (state={state}). Bitte abnehmen.",
+                success_message="✅ OK: The device was successfully updated to the new CAN settings. Please remove it.",
+                failure_message="ERROR: Reconfiguration failed (state={state}). Please remove the device.",
             )
 
     except KeyboardInterrupt:
