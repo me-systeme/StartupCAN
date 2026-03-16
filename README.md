@@ -1,5 +1,11 @@
 # StartupCAN
 
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Status](https://img.shields.io/badge/status-stable-brightgreen)
+![Platform](https://img.shields.io/badge/platform-windows-lightgrey)
+
+
 StartupCAN is a headless CAN startup and reconfiguration tool for GSV CAN devices.
 
 It is designed to configure devices directly over the CAN bus, without requiring USB access and without using GSVmulti for the actual reconfiguration workflow.
@@ -978,3 +984,7 @@ StartupCAN is designed for controlled, reproducible CAN setup workflows.
 Even if the YAML contains unique current IDs, StartupCAN still assumes that the actual bus state may differ. Therefore, the safest operating rule is:
 
 **Only one device at a time should be connected during reconfiguration.**
+
+## License
+
+This project is licensed under the MIT License – see the LICENSE file for details.
