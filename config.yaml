@@ -8,7 +8,9 @@
 # - the CAN baud rate used by the DLL during normal operation
 #
 # StartupCAN reads this file, validates it, performs the selected workflow,
-# and then writes `config.updated.yaml` with the detected effective device state.
+# and then writes the detected effective device state to `config.updated.yaml`.
+#
+# If StartupCAN is executed with `--in-place`, this file itself will be updated.
 # -----------------------------------------------------------------------------
 
 
@@ -60,45 +62,18 @@ devices:
       # - StartupCAN uses `current.ids` as the current start state
       default: false
       ids:
-        # ---------------------------------------------------------------------
-        # Device 1
-        # ---------------------------------------------------------------------
         - dev_no: 1
-
-          # Optional serial number for identification and safety checks.
-          # If present, StartupCAN can validate that the connected device
-          # matches the expected physical unit.
           serial: 25455437
-
-          # Optional current baud rate of this device.
-          # If omitted, StartupCAN falls back to `dll.canbaud`.
-          canbaud: 250000
-
-          # Current command CAN ID of the device.
           cmd_id: '0x102'
-
-          # Current answer CAN ID of the device.
           answer_id: '0x103'
-        
-        # ---------------------------------------------------------------------
-        # Device 2
-        # ---------------------------------------------------------------------
         - dev_no: 2
-          canbaud: 1000000
-          cmd_id: '0x100'
-          answer_id: '0x101'
-        
-        # ---------------------------------------------------------------------
-        # Device 3
-        # ---------------------------------------------------------------------
+          serial: 25455423
+          cmd_id: '0x104'
+          answer_id: '0x105'
         - dev_no: 3
-          canbaud: 1000000
-          cmd_id: '0x100'
-          answer_id: '0x101'
-    
-    # -------------------------------------------------------------------------
-    # Target device state
-    # -------------------------------------------------------------------------
+          serial: 25455439
+          cmd_id: '0x106'
+          answer_id: '0x107'
     new:
       # If true:
       # - StartupCAN ignores `new.ids`
@@ -108,33 +83,13 @@ devices:
       # - StartupCAN uses `new.ids` as the target configuration
       default: false
 
-      ids:
-        # ---------------------------------------------------------------------
-        # Target settings for device 1
-        # ---------------------------------------------------------------------
+      ids: 
         - dev_no: 1
-
-          # Optional serial number for serial mapping.
-          serial: 25455437
-
-          # Target command CAN ID of the device.
           cmd_id: "0x202"
-
-          # Current answer CAN ID of the device.
           answer_id: "0x203"
-        
-        # ---------------------------------------------------------------------
-        # Target settings for device 2
-        # ---------------------------------------------------------------------
         - dev_no: 2
-          serial: 25455423
           cmd_id: "0x204"
           answer_id: "0x205"
-        
-        # ---------------------------------------------------------------------
-        # Target settings for device 3
-        # ---------------------------------------------------------------------
         - dev_no: 3
-          serial: 25455439
           cmd_id: "0x206"
           answer_id: "0x207"

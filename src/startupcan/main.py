@@ -24,6 +24,7 @@ collisions on the bus.
 """
 
 import sys
+import argparse
 
 
 from startupcan.config import (
@@ -56,6 +57,15 @@ def main() -> int:
     6) Write config.updated.yaml with the detected final state
     7) Safely release all remaining active handles on shutdown
     """
+    parser = argparse.ArgumentParser(description="StartupCAN")
+    parser.add_argument(
+        "--in-place",
+        action="store_true",
+        help="Overwrite config.yaml instead of writing config.updated.yaml"
+    )
+
+    args = parser.parse_args()
+
     gsv = GSV86CAN()
     results = []
 
@@ -177,6 +187,7 @@ def main() -> int:
             current_default=current_default,
             success_message=run_cfg.success_message,
             warning_message=run_cfg.warning_message,
+            inplace=args.in_place,
         )
 
     finally:

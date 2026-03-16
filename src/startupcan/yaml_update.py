@@ -115,6 +115,7 @@ def _finalize_run_and_write_yaml(
     current_default: bool,
     success_message: str,
     warning_message: str,
+    inplace: bool = False,
 ) -> int:
     """
     Finalize a StartupCAN run and write `config.updated.yaml`.
@@ -159,8 +160,10 @@ def _finalize_run_and_write_yaml(
     # Determine whether the full run succeeded
     all_ok = _all_ok(results, len(DEVICE_CONFIG))
 
-    # The updated configuration is always written next to the original config
-    dst = Path(CONFIG_PATH).with_name("config.updated.yaml")
+    if inplace:
+        dst = Path(CONFIG_PATH)
+    else:
+        dst = Path(CONFIG_PATH).with_name("config.updated.yaml")
 
     _write_updated_yaml(
         src_path=Path(CONFIG_PATH),
@@ -171,7 +174,10 @@ def _finalize_run_and_write_yaml(
         drop_canbaud=all_ok,
     )
 
-    print(f"[INFO] Updated YAML written: {dst}")
+    if inplace:
+        print(f"[INFO] Configuration updated in-place: {dst}")
+    else:
+        print(f"[INFO] Updated YAML written: {dst}")
 
     if all_ok:
         print(success_message)

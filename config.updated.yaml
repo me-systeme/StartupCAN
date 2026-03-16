@@ -8,7 +8,9 @@
 # - the CAN baud rate used by the DLL during normal operation
 #
 # StartupCAN reads this file, validates it, performs the selected workflow,
-# and then writes `config.updated.yaml` with the detected effective device state.
+# and then writes the detected effective device state to `config.updated.yaml`.
+#
+# If StartupCAN is executed with `--in-place`, this file itself will be updated.
 # -----------------------------------------------------------------------------
 
 
@@ -62,16 +64,16 @@ devices:
       ids:
         - dev_no: 1
           serial: 25455437
-          cmd_id: '0x202'
-          answer_id: '0x203'
+          cmd_id: '0x102'
+          answer_id: '0x103'
         - dev_no: 2
           serial: 25455423
-          cmd_id: '0x204'
-          answer_id: '0x205'
+          cmd_id: '0x104'
+          answer_id: '0x105'
         - dev_no: 3
           serial: 25455439
-          cmd_id: '0x206'
-          answer_id: '0x207'
+          cmd_id: '0x106'
+          answer_id: '0x107'
     new:
       # If true:
       # - StartupCAN ignores `new.ids`

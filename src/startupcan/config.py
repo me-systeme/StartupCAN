@@ -514,8 +514,8 @@ def _project_root() -> Path:
 # -----------------------------------------------------------------------------
 PROJECT_ROOT = _project_root()
 
-# StartupCAN always reads from config.updated.yaml
-CONFIG_PATH = PROJECT_ROOT / "config.updated.yaml"
+# Default configuration file read by StartupCAN
+CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 
 # DLL path:
 # - in PyInstaller onefile mode, DLL is extracted into _MEIPASS

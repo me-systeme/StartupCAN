@@ -5,6 +5,10 @@ StartupCAN is a headless CAN startup and reconfiguration tool for GSV CAN device
 It is designed to configure devices directly over the CAN bus, without requiring USB access and without using GSVmulti for the actual reconfiguration workflow.
 
 
+<p align="center">
+  <img src="screenshots/wizard.png" alt="StartupCAN" width="900">
+</p>
+
 ## What is this application for?
 
 StartupCAN is useful when you want to:
@@ -25,7 +29,7 @@ StartupCAN has several practical advantages:
 
 - fully scriptable and reproducible workflow
 - YAML-based source of truth for current and target CAN settings
-- automatic creation of `config.updated.yaml`
+- automatic creation of `config.updated.yaml` reflecting the detected device state
 - supports partial success and interrupted runs
 - detects and records uncertain states via state probing
 - well-structured error handling with clear logs for diagnosis and recovery
@@ -117,10 +121,77 @@ Run the startup script and follow the terminal prompts.
 python run.py
 ```
 
-### 6. Check `config.updated.yaml`
+StartupCAN reads `config.yaml` and writes the detected device state to
+`config.updated.yaml`.
 
-After the run, StartupCAN writes a `config.updated.yaml` file that reflects the actual detected state of the devices.
+If you want StartupCAN to directly update the configuration file instead,
+run:
 
+```bash
+python run.py --in-place
+```
+
+### 6. Check the resulting configuration
+
+After the run, StartupCAN writes `config.updated.yaml` that reflects the
+detected actual device state.
+
+If everything looks correct, you may replace `config.yaml` with this file
+for the next run.
+
+Alternatively, you can run StartupCAN with `--in-place` to update the
+configuration file directly.
+
+For safety, it is recommended to first run StartupCAN without `--in-place` 
+and review `config.updated.yaml` before switching to direct in-place updates.
+
+
+## Interrupting a run safely
+
+StartupCAN supports safe interruption of the workflow.
+
+### Stopping between devices
+
+After each processed device, the wizard asks whether the next device should be handled.
+
+You can stop the overall run by entering:
+
+```bash
+N
+```
+
+In this case:
+
+* the run stops gracefully
+
+* the detected device states up to that point are written to the resulting configuration
+
+* `config.updated.yaml` (or `config.yaml` when using --in-place) is updated accordingly
+
+This allows partial runs without losing the detected configuration.
+
+
+### Aborting during a device step
+
+If a device step needs to be aborted immediately, you can press:
+
+```bash
+Ctrl + C
+```
+
+StartupCAN handles this interruption safely:
+
+* the current device step is aborted
+
+* active device sessions are released
+
+* internal DLL handles are cleaned up
+
+* the resulting configuration (`config.updated.yaml`) will be updated with a flag `unknown: true` for the device
+
+* the wizard continues and allows you to proceed with the **next device**
+
+This makes it possible to skip problematic devices without restarting the entire run.
 
 
 ## Operating modes
@@ -149,7 +220,7 @@ Each device is processed sequentially:
 
 * released afterwards
 
-* finally written into `config.updated.yaml` as the actual state
+* finally written into the resulting configuration (`config.updated.yaml`) as the actual state
 
 At the end, devices **may be connected together on the bus**.
 
@@ -182,7 +253,7 @@ Each device is processed sequentially:
 
 * released afterwards
 
-* finally written into `config.updated.yaml` as the actual state
+* finally written into the resulting configuration (`config.updated.yaml`) as the actual state
 
 At the end, devices **may be connected together on the bus**.
 
@@ -215,7 +286,7 @@ Each device is processed sequentially:
 
 * released afterwards
 
-* written into `config.updated.yaml` as the actual state
+* written into the resulting configuration (`config.updated.yaml`) as the actual state
 
 
 At the end, devices **must not be connected together on the bus**.
@@ -229,7 +300,7 @@ At the end, devices **must not be connected together on the bus**.
 
 * **old IDs** are the IDs in `current.ids`
 
-* **old baudrate** is either the baudrate in `current.ids` or `dll.canbaud` as fallback
+* **old baudrate** is either the baudrate (`canbaud`) in `current.ids` or `dll.canbaud` as fallback
 
 * **new IDs** are the IDs in `new.ids`
 
@@ -251,7 +322,7 @@ At the end, devices **must not be connected together on the bus**.
 
 * **old IDs** are the IDs in `current.ids`
 
-* **old baudrate** is either the baudrate in `current.ids` or `dll.canbaud` as fallback
+* **old baudrate** is either the baudrate (`canbaud`) in `current.ids` or `dll.canbaud` as fallback
 
 * **new IDs** are the **default IDs**
 
@@ -279,7 +350,7 @@ Possible states:
 
 ### YAML update behavior depending on state:
 
-`config.updated.yaml` is written based on the detected state:
+the resulting configuration (`config.updated.yaml`) is written based on the detected state:
 
 * **state="old"** → `current.ids` remains on **old IDs** and **old baudrate**
 
@@ -394,7 +465,7 @@ A["5. Set new IDs and baudrate <br/>Reset → Release<br/>Re-Activate (Retry)<br
 
 If Step 5 succeeds, the device is considered **successfully reconfigured**.
 
-If Step 5 fails, a **state probe** is performed and the resulting state is written into `config.updated.yaml`. (see **Failure Case 5**).
+If Step 5 fails, a **state probe** is performed and the resulting state is written into the resulting configuration (`config.updated.yaml`). (see **Failure Case 5**).
 
 
 ### Success case
@@ -406,13 +477,13 @@ A["SUCCESS<br/>current.ids = new IDs"]
 
 If a device was successfully reconfigured (`ok=True`):
 
-* `config.updated.yaml` stores the new IDs
+* the resulting configuration (`config.updated.yaml`) stores the new IDs
 
 * optionally the serial number and baudrate are also stored
 
 If **all** devices were successfully reconfigured:
 
-* `new.ids` is cleared in `config.updated.yaml` 
+* `new.ids` is cleared in the resulting configuration (`config.updated.yaml`) 
 
 * `new.default=false` is written
 
@@ -504,7 +575,7 @@ A["Serial mismatch / unreadable / target IDs could not be determined"]
 
 * `current.ids` remains on the old IDs
 
-* the read serial number is written into `config.updated.yaml` 
+* the read serial number is written into the resulting configuration (`config.updated.yaml`) 
 
 * `new.ids` and `new.default` remain unchanged
 
@@ -525,7 +596,7 @@ A["Serial mismatch / unreadable / target IDs could not be determined"]
 
 * `current.ids` remains on the old IDs
 
-* the read serial number is written into `config.updated.yaml`
+* the read serial number is written into the resulting configuration (`config.updated.yaml`)
 
 * `new.ids` and `new.default` remain unchanged
 
