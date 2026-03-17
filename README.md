@@ -199,6 +199,51 @@ StartupCAN handles this interruption safely:
 
 This makes it possible to skip problematic devices without restarting the entire run.
 
+## Build a Windows executable
+
+StartupCAN can also be packaged as a standalone Windows executable using PyInstaller.
+
+Install PyInstaller:
+
+```bash
+pip install pyinstaller
+```
+
+Then build the executable from the project root:
+
+```bash
+pyinstaller --clean --noconfirm --onefile --console --name StartupCAN --paths src --add-binary "GSV86CAN.dll;." --hidden-import yaml --hidden-import ruamel --hidden-import ruamel.yaml run.py
+```
+
+After the build, the executable will be located in:
+
+```bash
+dist/StartupCAN.exe
+```
+
+You can then run it from a terminal:
+
+```bash
+StartupCAN.exe
+```
+
+or update the configuration directly in place:
+
+```bash
+StartupCAN.exe --in-place
+```
+
+### Notes
+
+* `--console` keeps the terminal visible (required for interactive usage).
+
+* `--paths src` ensures that the `startupcan` package is found.
+
+* `--add-binary "GSV86CAN.dll;."` bundles the CAN DLL with the executable.
+
+* `--hidden-import` flags are required because some dependencies (like `yaml` and `ruamel.yaml`) are dynamically imported and may not be detected automatically by PyInstaller.
+
+* It is recommended to build the executable in the same environment and architecture as the target system (e.g. Windows 32-bit if the DLL is 32-bit).
 
 ## Operating modes
 
