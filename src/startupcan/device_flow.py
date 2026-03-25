@@ -245,12 +245,16 @@ def _handle_skip_if_same_endpoint(
     results: list[dict],
     plan: DevicePlan,
     sn: int | None,
+    verified_on_device: bool,
     state_on_skip: str = "old",
     print_message: str = "Device already has target CAN settings.",
     disconnect_message: str = "OK (skip). Remove device.",
 ) -> tuple[bool, bool, str]:
     """
-    Skip reconfiguration if the device already has the target endpoint.
+    Skip reconfiguration only if:
+    - the planned old endpoint equals the planned target endpoint, and
+    - a hard readback verification on the actual device has confirmed
+      CMD, ANSWER, CV, and CANBAUD.
 
     Returns:
         already_recorded,
@@ -260,11 +264,19 @@ def _handle_skip_if_same_endpoint(
     if plan.cmd_new is None or plan.ans_new is None:
         return False, False, ""
     
-    if not _same_endpoint(
+    planned_same = _same_endpoint(
         plan.cmd_old, plan.ans_old,
         plan.cmd_new, plan.ans_new,
         plan.baud_old, plan.baud_new,
-    ):
+    )
+    if not planned_same:
+        return False, False, ""
+    
+    if not verified_on_device:
+        print(
+            f"[{_fmt_dev(plan.dev_no, sn)}] Planned old/new endpoint is identical, "
+            "but device readback is not fully correct. Re-applying settings."
+        )
         return False, False, ""
 
     print(f"[{_fmt_dev(plan.dev_no, sn)}] {print_message}")
@@ -481,6 +493,7 @@ def _run_device_step(
     already_recorded = False
     skip_programming = False
     disconnect_reason = "Continue with next device."
+    start_verify_ok = False
 
     try:
         # Prompt the user to connect the device physically.
@@ -520,9 +533,10 @@ def _run_device_step(
         # Step 3: verify the current endpoint.
         # Verification failure is only a warning and does not stop the workflow.
         if not skip_programming:
-            ok = _verify_ids(gsv, plan.dev_no, sn, plan.cmd_old, plan.ans_old, plan.baud_old)
-            if not ok:
-                print(f"[{_fmt_dev(plan.dev_no, sn)}] WARN: Start CAN IDs do not match (despite successful activation).")
+            start_verify_ok = _verify_ids(gsv, plan.dev_no, sn, plan.cmd_old, plan.ans_old, plan.baud_old)
+            if not start_verify_ok:
+                print(f"[{_fmt_dev(plan.dev_no, sn)}] WARN: Start CAN settings do not fully match "
+                        f"(CMD/ANS/CV/BAUD) despite successful activation.")
 
         # Step 4: skip the programming step if the device already has the target settings.
         if not skip_programming:
@@ -530,6 +544,7 @@ def _run_device_step(
                 results=results,
                 plan=plan,
                 sn=sn,
+                verified_on_device=start_verify_ok,
                 state_on_skip="new",
                 print_message="The device already has the target CAN settings.",
                 disconnect_message="OK (skipped). Please remove the device.",

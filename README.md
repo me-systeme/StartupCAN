@@ -24,7 +24,7 @@ StartupCAN is useful when you want to:
 - reset devices back to default CAN settings
 - apply a defined target configuration from YAML
 - generate an updated YAML file that reflects the actual device state after a run
-- prepare devices for Open Source applications like the GSV86CAN Viewer (https://github.com/me-systeme/GSV86CANViewer)
+- prepare devices for Open Source applications like the [GSV86CAN Viewer](https://github.com/me-systeme/GSV86CANViewer)
 
 The tool is especially useful in production, commissioning, service, or recovery workflows where devices are connected over CAN and should be handled one by one in a controlled and reproducible way.
 
@@ -49,12 +49,12 @@ flowchart TD
   B["1. Activate with current IDs and baudrate"]
 
   B -->|FAIL| P
-  B -->|OK| C["2. Serial-Check<br/>if serial is set in current.ids and/or new.ids"]
+  B -->|OK| C["2. Serial check<br/>if serial is set in current.ids and/or new.ids"]
 
   C -->|FAIL| F2["Serial mismatch / serial unreadable / target IDs could not be determined"]
-  C -->|OK| D["3. Read CAN Settings<br/>(best-effort)"]
+  C -->|OK| D["3. Read back CAN settings<br/>(CMD / ANS / CV / BAUD)"]
 
-  D -->|OK/ not OK| E["4. Check <br/>Same Endpoint?"]
+  D -->|OK/ not OK| E["4. Check same endpoint?<br/>Skip only if plan matches AND device readback is fully correct"]
   
   E -->|No| F["5. Set new IDs and baudrate<br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
   E -->|Yes| F3["SUCCESS<br/>current.ids = new.ids"]
@@ -64,7 +64,20 @@ flowchart TD
 
 ``` 
 
+## Internal CAN setting rule
 
+StartupCAN treats the CAN value frame ID (`CV_ID`) as an internal consistency rule:
+
+* `CV_ID = ANSWER_ID`
+
+This means:
+
+- `CV_ID` is always set to the same value as `ANSWER_ID`
+- `CV_ID` is verified during readback and state probing
+- `CV_ID` is intentionally **not** stored separately in YAML
+
+This keeps the YAML configuration simple while still ensuring that the effective
+device CAN settings are internally consistent.
 
 
 ## Requirements
@@ -385,6 +398,15 @@ At the end, devices **must not be connected together on the bus**.
 
 A state probe checks which CAN settings are most likely currently active on the device.
 
+A state probe is only considered successful if:
+
+* activation with the tested CMD/ANSWER ID and baudrate works, and
+* the device readback confirms:
+    * CMD ID is correct
+    * ANSWER ID is correct
+    * CV ID equals ANSWER ID
+    * baudrate is correct
+
 Possible states:
 
 
@@ -396,7 +418,8 @@ Possible states:
 
 * **state = "new_oldbaud"** → device has the **new IDs** and the **old baudrate**
 
-* **state = "unknown"** → neither old nor new nor mixed states could be activated successfully
+* **state = "unknown"** → neither old nor new nor mixed states could be activated successfully. This also includes cases where activation works but the readback is not fully
+consistent (for example, if `CV_ID` does not match `ANSWER_ID`).
 
 
 ### YAML update behavior depending on state:
@@ -461,20 +484,29 @@ Note: in all serial-check failure cases the device had already been activated, s
 
 
 
-### Step 3 – Read CAN settings (optional / best effort)
+### Step 3 – Read back CAN settings (CMD / ANS / CV / BAUD)
 
 ```mermaid
 flowchart TD
-A["3. Read CAN Settings<br/>(best-effort)"]
+A["3. Read back CAN settings<br/>(CMD / ANS / CV / BAUD)"]
 ``` 
 
-* `get_can_settings` reads CMD ID / ANS ID / baudrate from the device
+* `get_can_settings` reads CMD ID / ANS ID / CV ID / baudrate from the device
 
-* if this fails, only a warning is printed
+* StartupCAN expects the following invariant:
+
+    * `CMD_ID == expected cmd_id`
+    * `ANSWER_ID == expected answer_id`
+    * `CV_ID == expected answer_id`
+    * `CANBAUD == expected baudrate`
+
+* if this check fails, a warning is printed
 
 **Important:** failure here does **not** stop the workflow.
 
-The script still continues with **Step 4**.
+However, if the planned old and new endpoint are identical, StartupCAN only
+skips reconfiguration if this device readback is fully correct.
+Otherwise the settings are written again.
 
 
 
@@ -483,12 +515,26 @@ The script still continues with **Step 4**.
 
 ```mermaid
 flowchart TD
-A["4. Check <br/>Same endpoint?"]
+A["4. Check same endpoint?<br/>Skip only if plan matches AND device readback is fully correct"]
 ```
 
-If the device already has the target IDs and target baudrate, it is skipped.
+If the planned old endpoint and the planned new endpoint are identical,
+StartupCAN performs an additional hard readback check on the actual device.
 
-Otherwise the workflow continues with **Step 5**.
+The device is skipped only if all of the following are true:
+
+* planned old CMD ID == planned new CMD ID
+* planned old ANSWER ID == planned new ANSWER ID
+* planned old baudrate == planned new baudrate
+* device readback confirms:
+    * CMD ID is correct
+    * ANSWER ID is correct
+    * CV ID equals ANSWER ID
+    * baudrate is correct
+
+If this readback is not fully correct, StartupCAN does **not** skip the device.
+Instead, it re-applies the target settings to normalize the device state.
+
 
 
 ### Step 5 – Set IDs and baudrate → Reset → Release → Re-Activate → Verify → Release
@@ -502,6 +548,8 @@ A["5. Set new IDs and baudrate <br/>Reset → Release<br/>Re-Activate (Retry)<br
 
 * `set_can_settings(CANSET_CAN_OUT_ANS_ID, ans_new)`
 
+* `set_can_settings(CANSET_CAN_CV_VALUE_ID, ans_new)`
+
 * `set_can_settings(CANSET_CAN_BAUD_HZ, int(baud_new))`
 
 * `reset_device()`
@@ -512,7 +560,21 @@ A["5. Set new IDs and baudrate <br/>Reset → Release<br/>Re-Activate (Retry)<br
 
 * verify via `get_can_settings`
 
+* **Case 3:** load factory default dataset 
+
 * final `release()`
+
+StartupCAN always enforces:
+
+* `CV_ID = ANSWER_ID`
+
+In Case 3, StartupCAN performs an additional step after a successful reconfiguration:
+
+```python
+gsv.load_settings(dev_no, dataset_no=1)
+```
+
+This loads the factory default dataset from the device.
 
 If Step 5 succeeds, the device is considered **successfully reconfigured**.
 
@@ -653,7 +715,7 @@ A["Serial mismatch / unreadable / target IDs could not be determined"]
 
 
 
-### 3. Read CAN settings (Step 3) fails
+### 3. Read back CAN settings (CMD / ANS / CV / BAUD) (Step 3) fails
 
 ```mermaid
 flowchart TD
@@ -680,14 +742,30 @@ This affects verification/diagnostics, but not necessarily reconfiguration itsel
 
 ```mermaid
 flowchart TD
-E["Check = Same IDs and baudrate"]
+E["Check = same planned endpoint + verified device readback"]
 ```
 
 This is not really a failure. The device is simply skipped.
 
+**Condition:**
+
+The device is skipped only if:
+
+* the planned old endpoint equals the planned new endpoint, and
+* device readback confirms:
+  * CMD ID is correct
+  * ANSWER ID is correct
+  * CV ID equals ANSWER ID
+  * baudrate is correct
+
+If the planned endpoint is identical but the device readback is not fully correct,
+StartupCAN does not skip the device and instead re-applies the target settings.
+
 **Action:**
 
-* device is **not reconfigured**
+* device is **not reconfigured** if the full skip condition is met
+
+* otherwise the normal reconfiguration step is executed
 
 * device must be removed from the bus
 
@@ -708,7 +786,7 @@ flowchart TD
 A["State probe<br/>old / new / old_newbaud / new_oldbaud / unknown"]
 ```
 
-**Aktion:**
+**Action:**
 
 * device is **not safely marked as reconfigured**
 
@@ -902,6 +980,13 @@ These checks are independent of the operating mode:
 * unknown devices may be marked using `unknown: true` in `current.ids`
 
 * baudrate handling depends on the case and configuration
+
+Note:
+
+* `CV_ID` is not configured separately in YAML.
+* StartupCAN always derives it internally from `answer_id`.
+* During programming and verification, the tool enforces:
+  `CV_ID = answer_id`.
 
 
 **CAN ID uniqueness rules**

@@ -19,6 +19,7 @@ from startupcan.gsv86can import (
     GSV86CAN,
     CANSET_CAN_IN_CMD_ID,
     CANSET_CAN_OUT_ANS_ID,
+    CANSET_CAN_CV_VALUE_ID,
     CANSET_CAN_BAUD_HZ,
 )
 from startupcan.runtime import _set_handle_active, _safe_release
@@ -106,11 +107,18 @@ def _try_activate_n(gsv, dev_no, cmd, ans, *, canbaud: int | None = None, tries=
     ok, _ = _try_activate(gsv, dev_no, cmd, ans, canbaud=canbaud, tries=tries, delay=delay, read_sn=False, verbose=False)
     return ok
 
-def _verify_ids(gsv: GSV86CAN, dev_no: int, serial: int | None, exp_cmd: int, exp_ans: int, exp_canbaud: int) -> bool:
+def _verify_ids(gsv: GSV86CAN, dev_no: int, serial: int | None, exp_cmd: int, exp_ans: int, exp_canbaud: int, *, verbose: bool = True) -> bool:
     """
     Read back the device CAN settings and compare them with the expected values.
 
-    This is a best-effort verification step. Failure only produces a warning.
+    Expected invariant in this application:
+    - CMD_ID == exp_cmd
+    - ANSWER_ID == exp_ans
+    - CV_ID == exp_ans
+    - CANBAUD == exp_canbaud
+
+    This function is used both for diagnostic logging and for hard workflow
+    decisions such as state probing and skip prevention.
 
     Returns:
         True if all values match, otherwise False
@@ -118,22 +126,27 @@ def _verify_ids(gsv: GSV86CAN, dev_no: int, serial: int | None, exp_cmd: int, ex
     try:
         cmd_read = gsv.get_can_settings(dev_no, CANSET_CAN_IN_CMD_ID)
         ans_read = gsv.get_can_settings(dev_no, CANSET_CAN_OUT_ANS_ID)
+        cv_read = gsv.get_can_settings(dev_no, CANSET_CAN_CV_VALUE_ID)
         canbaud_read = gsv.get_can_settings(dev_no,CANSET_CAN_BAUD_HZ)
 
-        ok = (cmd_read == exp_cmd and ans_read == exp_ans and canbaud_read == exp_canbaud)
+        ok = (cmd_read == exp_cmd and ans_read == exp_ans and cv_read == exp_ans and canbaud_read == exp_canbaud)
 
         tag = _fmt_dev(dev_no, serial)
-        print(f"[{tag}] verify CMD_ID   = {fmt_can_id(cmd_read)} (raw={cmd_read})")
-        print(f"[{tag}] verify ANSWER_ID= {fmt_can_id(ans_read)} (raw={ans_read})")
-        print(f"[{tag}] verify CANBAUD= {canbaud_read}")
 
-        if not ok:
-            print(f"[{tag}] WARN: verify differs from expected "
-                  f"(expected CMD={fmt_can_id(exp_cmd)} ANS={fmt_can_id(exp_ans)} CANBAUD={exp_canbaud})")
+        if verbose:
+            print(f"[{tag}] verify CMD_ID   = {fmt_can_id(cmd_read)} (raw={cmd_read})")
+            print(f"[{tag}] verify ANSWER_ID= {fmt_can_id(ans_read)} (raw={ans_read})")
+            print(f"[{tag}] verify CV_ID     = {fmt_can_id(cv_read)} (raw={cv_read})")
+            print(f"[{tag}] verify CANBAUD= {canbaud_read}")
+
+            if not ok:
+                print(f"[{tag}] WARN: verify differs from expected "
+                    f"(expected CMD={fmt_can_id(exp_cmd)} ANS={fmt_can_id(exp_ans)} CV={fmt_can_id(exp_ans)} CANBAUD={exp_canbaud})")
         return ok
     
     except Exception as e:
-        print(f"[{_fmt_dev(dev_no, serial)}] WARN: verification failed: {e}")
+        if verbose:
+            print(f"[{_fmt_dev(dev_no, serial)}] WARN: verification failed: {e}")
         return False
 
 def _apply_target_and_reconnect(
@@ -149,7 +162,7 @@ def _apply_target_and_reconnect(
     and verify the result.
 
     Steps:
-    - write new CMD/ANS IDs
+    - write new CMD/ANS IDs/CV IDs
     - optionally write the new baudrate
     - reset the device
     - release the old session
@@ -165,9 +178,10 @@ def _apply_target_and_reconnect(
     """
     try:
         # Write the new CAN IDs.
-        print(f"[{_fmt_dev(dev_no, serial)}] set NEW IDs: CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)}")
+        print(f"[{_fmt_dev(dev_no, serial)}] set NEW IDs: CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)} CV={fmt_can_id(ans_new)}")
         gsv.set_can_settings(dev_no, CANSET_CAN_IN_CMD_ID, cmd_new)
         gsv.set_can_settings(dev_no, CANSET_CAN_OUT_ANS_ID, ans_new)
+        gsv.set_can_settings(dev_no, CANSET_CAN_CV_VALUE_ID, ans_new)
 
         # Optionally write the new baudrate.
         if baud_new is not None:
@@ -201,7 +215,7 @@ def _apply_target_and_reconnect(
         if not ok_verify:
             print(f"[{_fmt_dev(dev_no, sn_out)}] WARN: verification after re-activation "
                   f"does not match expected values "
-                  f"(expected CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)}).")
+                  f"(expected CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)} CV={fmt_can_id(ans_new)} CANBAUD={activate_baud}).")
 
         time.sleep(0.1)
 
@@ -253,9 +267,25 @@ def _probe_state_after_fail(
         """
         print(f"[DEV {dev_no}] Probe {label}: BAUD={baud} CMD={fmt_can_id(cmd)} ANS={fmt_can_id(ans)}")
         ok = _try_activate_n(gsv, dev_no, cmd, ans, canbaud=baud, tries=5, delay=0.3)
-        if ok:
-            _safe_release(gsv, dev_no, where=f"probe:{label}-ok")
-        return ok
+        
+        if not ok:
+            return False
+        
+        ok_verify = _verify_ids(gsv, dev_no, None, cmd, ans, baud, verbose=False)
+
+        if ok_verify:
+            print(
+                f"[DEV {dev_no}] Probe {label}: activation+verify OK "
+                f"(CMD={fmt_can_id(cmd)} ANS={fmt_can_id(ans)} CV={fmt_can_id(ans)} BAUD={baud})"
+            )
+        else:
+            print(
+                f"[DEV {dev_no}] Probe {label}: activation OK but verify mismatch "
+                f"(expected CMD={fmt_can_id(cmd)} ANS={fmt_can_id(ans)} CV={fmt_can_id(ans)} BAUD={baud})"
+            )
+        
+        _safe_release(gsv, dev_no, where=f"probe:{label}")
+        return ok_verify
 
     # 1) old IDs + old baudrate
     if _probe("old@oldbaud", cmd_old, ans_old, baud_old):
@@ -281,9 +311,11 @@ def _probe_state_after_fail(
 
 def _same_endpoint(cmd_a: int, ans_a: int, cmd_b: int, ans_b: int, baud_a: int, baud_b: int) -> bool:
     """
-    Compare two CAN endpoints including baudrate.
+    Compare two planned CAN endpoints including baudrate.
 
-    Returns:
-        True if CMD ID, ANSWER ID, and baudrate are all equal
+    Note:
+        This only compares the planned configuration values.
+        It does NOT verify the actual device readback state.
+        In particular, it does not guarantee that CV_ID is correct.
     """
     return int(cmd_a) == int(cmd_b) and int(ans_a) == int(ans_b) and int(baud_a) == int(baud_b)
