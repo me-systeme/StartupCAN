@@ -75,7 +75,7 @@ def _activate_or_record_failure(
 
     # Activation failed
     # If target endpoint is unknown we cannot probe new endpoint
-    if plan.cmd_new is None or plan.ans_new is None:
+    if plan.cmd_new is None or plan.ans_new is None or plan.value_new is None:
         state = "unknown"
         fail_plan = plan.with_safe_new_ids()
     else:
@@ -87,8 +87,10 @@ def _activate_or_record_failure(
             fail_plan.dev_no,
             fail_plan.cmd_old,
             fail_plan.ans_old,
+            fail_plan.value_old,
             fail_plan.cmd_new,
             fail_plan.ans_new,
+            fail_plan.value_new,
             baud_old=fail_plan.baud_old,
             baud_new=fail_plan.baud_new,
         )
@@ -102,8 +104,10 @@ def _activate_or_record_failure(
         state=state,
         cmd_old=fail_plan.cmd_old,
         ans_old=fail_plan.ans_old,
+        value_old=fail_plan.value_old,
         cmd_new=fail_plan.cmd_new,
         ans_new=fail_plan.ans_new,
+        value_new=fail_plan.value_new,
         baud_old=fail_plan.baud_old,
         baud_new=fail_plan.baud_new,
         warn_unknown=True,
@@ -136,15 +140,15 @@ def _resolve_target_ids_after_activate(
 
     # When SN_MODE is disabled, target IDs must already exist
     if not SN_MODE:
-        if plan.cmd_new is None or plan.ans_new is None:
+        if plan.cmd_new is None or plan.ans_new is None or plan.value_new is None:
             raise ValueError(f"SN_MODE=False but target IDs missing for dev_no={plan.dev_no}")
         return plan, False, False, ""
 
     # Resolve target IDs based on serial number
     try:
-        cmd_new, ans_new = _target_ids(plan.dev_no, sn)
+        cmd_new, ans_new, value_new = _target_ids(plan.dev_no, sn)
         print(f"[{_fmt_dev(plan.dev_no, sn)}] Target IDs resolved via serial mapping.")
-        return plan.with_new_ids(cmd_new, ans_new), False, False, ""
+        return plan.with_new_ids(cmd_new, ans_new, value_new), False, False, ""
 
     except KeyError as e:
         print(f"[{_fmt_dev(plan.dev_no, sn)}] ERROR: {e}")
@@ -160,8 +164,10 @@ def _resolve_target_ids_after_activate(
             state=fail_state,
             cmd_old=fail_plan.cmd_old,
             ans_old=fail_plan.ans_old,
+            value_old=fail_plan.value_old,
             cmd_new=fail_plan.cmd_new,
             ans_new=fail_plan.ans_new,
+            value_new=fail_plan.value_new,
             baud_old=fail_plan.baud_old,
             baud_new=fail_plan.baud_new,
         )
@@ -207,8 +213,10 @@ def _validate_expected_serial(
             state="old",
             cmd_old=safe_plan.cmd_old,
             ans_old=safe_plan.ans_old,
+            value_old=safe_plan.value_old,
             cmd_new=safe_plan.cmd_new,
             ans_new=safe_plan.ans_new,
+            value_new=safe_plan.value_new,
             baud_old=safe_plan.baud_old,
             baud_new=safe_plan.baud_new,
         )
@@ -229,8 +237,10 @@ def _validate_expected_serial(
             state="old",
             cmd_old=safe_plan.cmd_old,
             ans_old=safe_plan.ans_old,
+            value_old=safe_plan.value_old,
             cmd_new=safe_plan.cmd_new,
             ans_new=safe_plan.ans_new,
+            value_new=safe_plan.value_new,
             baud_old=safe_plan.baud_old,
             baud_new=safe_plan.baud_new,
         )
@@ -261,12 +271,12 @@ def _handle_skip_if_same_endpoint(
         skip_programming,
         disconnect_reason
     """
-    if plan.cmd_new is None or plan.ans_new is None:
+    if plan.cmd_new is None or plan.ans_new is None or plan.value_new is None:
         return False, False, ""
     
     planned_same = _same_endpoint(
-        plan.cmd_old, plan.ans_old,
-        plan.cmd_new, plan.ans_new,
+        plan.cmd_old, plan.ans_old, plan.value_old,
+        plan.cmd_new, plan.ans_new, plan.value_new,
         plan.baud_old, plan.baud_new,
     )
     if not planned_same:
@@ -289,8 +299,10 @@ def _handle_skip_if_same_endpoint(
         state=state_on_skip,
         cmd_old=plan.cmd_old,
         ans_old=plan.ans_old,
+        value_old=plan.value_old,
         cmd_new=plan.cmd_new,
         ans_new=plan.ans_new,
+        value_new=plan.value_new,
         baud_old=plan.baud_old,
         baud_new=plan.baud_new,
     )
@@ -316,7 +328,7 @@ def _apply_target_or_record_result(
         disconnect_reason
     """
 
-    if plan.cmd_new is None or plan.ans_new is None:
+    if plan.cmd_new is None or plan.ans_new is None or plan.value_new is None:
         raise ValueError(f"Missing target IDs for dev_no={plan.dev_no}")
     
     ok2, sn2 = _apply_target_and_reconnect(
@@ -325,6 +337,7 @@ def _apply_target_or_record_result(
         sn,
         plan.cmd_new,
         plan.ans_new,
+        plan.value_new,
         baud_new=plan.baud_new,
     )
 
@@ -336,8 +349,10 @@ def _apply_target_or_record_result(
         plan.dev_no,
         plan.cmd_old,
         plan.ans_old,
+        plan.value_old,
         plan.cmd_new,
         plan.ans_new,
+        plan.value_new,
         baud_old=plan.baud_old,
         baud_new=plan.baud_new,
     )
@@ -350,8 +365,10 @@ def _apply_target_or_record_result(
         state=state,
         cmd_old=plan.cmd_old,
         ans_old=plan.ans_old,
+        value_old=plan.value_old,
         cmd_new=plan.cmd_new,
         ans_new=plan.ans_new,
+        value_new=plan.value_new,
         baud_old=plan.baud_old,
         baud_new=plan.baud_new,
         warn_unknown=True,
@@ -398,8 +415,10 @@ def _handle_keyboard_interrupt(
             state="unknown",
             cmd_old=safe_plan.cmd_old,
             ans_old=safe_plan.ans_old,
+            value_old=safe_plan.value_old,
             cmd_new=safe_plan.cmd_new,
             ans_new=safe_plan.ans_new,
+            value_new=safe_plan.value_new,
             baud_old=safe_plan.baud_old,
             baud_new=safe_plan.baud_new,
             warn_unknown=True,
@@ -439,8 +458,10 @@ def _device_fail(
             safe_plan.dev_no,
             safe_plan.cmd_old,
             safe_plan.ans_old,
+            safe_plan.value_old,
             safe_plan.cmd_new,
             safe_plan.ans_new,
+            safe_plan.value_new,
             baud_old=safe_plan.baud_old,
             baud_new=safe_plan.baud_new,
         )
@@ -455,8 +476,10 @@ def _device_fail(
         state=state,
         cmd_old=safe_plan.cmd_old,
         ans_old=safe_plan.ans_old,
+        value_old=safe_plan.value_old,
         cmd_new=safe_plan.cmd_new,
         ans_new=safe_plan.ans_new,
+        value_new=safe_plan.value_new,
         baud_old=safe_plan.baud_old,
         baud_new=safe_plan.baud_new,
         warn_unknown=True,
@@ -533,7 +556,7 @@ def _run_device_step(
         # Step 3: verify the current endpoint.
         # Verification failure is only a warning and does not stop the workflow.
         if not skip_programming:
-            start_verify_ok = _verify_ids(gsv, plan.dev_no, sn, plan.cmd_old, plan.ans_old, plan.baud_old)
+            start_verify_ok = _verify_ids(gsv, plan.dev_no, sn, plan.cmd_old, plan.ans_old, plan.value_old, plan.baud_old)
             if not start_verify_ok:
                 print(f"[{_fmt_dev(plan.dev_no, sn)}] WARN: Start CAN settings do not fully match "
                         f"(CMD/ANS/CV/BAUD) despite successful activation.")

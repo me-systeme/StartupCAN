@@ -24,6 +24,7 @@ from startupcan.config import (
     SN_MODE,
     DEFAULT_CMD_ID,
     DEFAULT_ANS_ID,
+    DEFAULT_VALUE_ID,
     DEFAULT_CANBAUD,
     CANBAUD,
 )
@@ -143,11 +144,13 @@ def _build_device_plan(d: dict) -> tuple[DevicePlan, int | None]:
         # Case 2
         cmd_old = DEFAULT_CMD_ID
         ans_old = DEFAULT_ANS_ID
+        value_old = DEFAULT_VALUE_ID
         baud_old = DEFAULT_CANBAUD
     else:
         # Case 1 + 3
         cmd_old = int(d["cmd_id"])
         ans_old = int(d["answer_id"])
+        value_old = int(d["value_id"]) if d.get("value_id") is not None else None
         baud_old = _current_canbaud_for(dev_no) or CANBAUD
 
     # Case 3: forced reset to default endpoint
@@ -157,9 +160,11 @@ def _build_device_plan(d: dict) -> tuple[DevicePlan, int | None]:
                 dev_no=dev_no,
                 cmd_old=cmd_old,
                 ans_old=ans_old,
+                value_old=value_old,
                 baud_old=baud_old,
                 cmd_new=DEFAULT_CMD_ID,
                 ans_new=DEFAULT_ANS_ID,
+                value_new=DEFAULT_VALUE_ID,
                 baud_new=DEFAULT_CANBAUD,
             ),
             expected_sn,
@@ -172,30 +177,34 @@ def _build_device_plan(d: dict) -> tuple[DevicePlan, int | None]:
                 dev_no=dev_no,
                 cmd_old=cmd_old,
                 ans_old=ans_old,
+                value_old=value_old,
                 baud_old=baud_old,
                 cmd_new=None,
                 ans_new=None,
+                value_new=None,
                 baud_new=CANBAUD,
             ),
             expected_sn,
         )
 
     # Case 1 + 2: target IDs are known directly via dev_no mapping
-    target_cmd, target_ans = _new_ids_for(dev_no)
+    target_cmd, target_ans, target_value = _new_ids_for(dev_no)
     return (
         DevicePlan(
             dev_no=dev_no,
             cmd_old=cmd_old,
             ans_old=ans_old,
+            value_old=value_old,
             baud_old=baud_old,
             cmd_new=target_cmd,
             ans_new=target_ans,
+            value_new=target_value,
             baud_new=CANBAUD,
         ),
         expected_sn,
     )
 
-def _new_ids_for(dev_no: int) -> tuple[int, int]:
+def _new_ids_for(dev_no: int) -> tuple[int, int, int]:
     """
     Look up target CAN IDs for a device via dev_no.
 
@@ -212,10 +221,10 @@ def _new_ids_for(dev_no: int) -> tuple[int, int]:
     """
     for d in DEVICE_NEW:
         if int(d["dev_no"]) == int(dev_no):
-            return int(d["cmd_id"]), int(d["answer_id"])
+            return int(d["cmd_id"]), int(d["answer_id"]), int(d["value_id"])
     raise KeyError(f"DEV {dev_no}: no target IDs found in devices.config.new.ids")
 
-def _new_ids_for_serial(serial: int) -> tuple[int, int]:
+def _new_ids_for_serial(serial: int) -> tuple[int, int, int]:
     """
     Look up target CAN IDs via serial number.
 
@@ -232,10 +241,10 @@ def _new_ids_for_serial(serial: int) -> tuple[int, int]:
     """
     for d in DEVICE_NEW:
         if "serial" in d and int(d["serial"]) == int(serial):
-            return int(d["cmd_id"]), int(d["answer_id"])
+            return int(d["cmd_id"]), int(d["answer_id"]), int(d["value_id"])
     raise KeyError(f"No target IDs found in new.ids for serial={serial}")
 
-def _target_ids(dev_no: int, serial: int | None) -> tuple[int, int]:
+def _target_ids(dev_no: int, serial: int | None) -> tuple[int, int, int]:
     """
     Resolve target CAN IDs for a device.
 
@@ -306,6 +315,7 @@ def _baseline_current_for_case2_with_baud() -> list[dict]:
             "dev_no": int(d["dev_no"]),
             "cmd_id": int(DEFAULT_CMD_ID),
             "answer_id": int(DEFAULT_ANS_ID),
+            "value_id": int(DEFAULT_VALUE_ID),
             "canbaud": int(DEFAULT_CANBAUD),
         })
     baseline.sort(key=lambda x: int(x["dev_no"]))

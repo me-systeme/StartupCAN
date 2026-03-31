@@ -25,6 +25,9 @@ dll:
   # CAN bus baud rate in bits per second used as the normal runtime baud rate.
   # StartupCAN uses this as the target baud rate in normal reconfiguration modes
   # unless devices are explicitly reset to the default baud rate.
+  # Integer (Hz)
+  # Allowed values:
+  #   1000000, 500000, 250000, 125000, 100000, 50000, 25000
   canbaud: 250000
 
 
@@ -39,16 +42,29 @@ devices:
     # -------------------------------------------------------------------------
     # These values define the shared default endpoint used by devices in
     # default mode and by forced-reset workflows.
+    # Used when:
+    # - current.default = true
+    # - new.default = true (reset mode)
     assign:
       # Default baud rate used when `current.default=true`
       # or when devices are reset back to default settings.
+      # Integer (Hz)
+      # Same allowed values as dll.canbaud
       default_canbaud: 1000000
 
       # Default CAN command ID used in default mode.
+      # String (hex, 11-bit CAN ID)
+      # Format: "0x100" – "0x7FF"
       default_cmd_id: "0x100"
 
       # Default CAN answer ID used in default mode.
+      # String (hex, 11-bit CAN ID)
+      # Must be different from default_cmd_id
       default_ans_id: "0x101"
+
+      # Default CAN value ID used in default mode.
+      # String (hex, 11-bit CAN ID)
+      default_value_id: "0x101"
 
     # -------------------------------------------------------------------------
     # Current device state
@@ -61,9 +77,28 @@ devices:
       # If false:
       # - StartupCAN uses `current.ids` as the current start state
       default: false
+      # List of devices (one entry per dev_no)
+      #
+      # Rules:
+      # - dev_no must be unique
+      # - cmd_id != answer_id
+      # - duplicates across devices are allowed (only one device is connected)
+      #
+      # Optional fields:
+      # - serial   → used for validation
+      # - canbaud  → overrides dll.canbaud for activation
+      # - unknown  → devices may be marked using unknown: true in current.ids
+      #
+      # If canbaud is missing → dll.canbaud is used
+      #
+      # NOTE:
+      # the can value id (cv_id) is not configurable.
+      # StartupCAN always enforces:
+      # cv_id = answer_id
       ids:
         - dev_no: 1
           serial: 25455437
+          canbaud: 250000
           cmd_id: '0x102'
           answer_id: '0x103'
         - dev_no: 2
@@ -83,4 +118,31 @@ devices:
       # - StartupCAN uses `new.ids` as the target configuration
       default: false
 
-      ids: []
+      # Required if new.default = false
+      #
+      # Rules:
+      # - dev_no must match current.ids (Case 1)
+      # - cmd_id != answer_id
+      # - ALL IDs must be globally unique across all devices
+      #
+      # Optional:
+      # - serial → enables mapping by serial instead of dev_no
+      #   (if used, ALL entries must contain serial)
+      #
+      # NOTE:
+      # the can value id (cv_id) is not configurable.
+      # StartupCAN always enforces:
+      # cv_id = answer_id
+      ids:
+        - dev_no: 1
+          serial: 25455437
+          cmd_id: '0x102'
+          answer_id: '0x103'
+        - dev_no: 2
+          serial: 25455423
+          cmd_id: '0x104'
+          answer_id: '0x105'
+        - dev_no: 3
+          serial: 25455439
+          cmd_id: '0x106'
+          answer_id: '0x107'

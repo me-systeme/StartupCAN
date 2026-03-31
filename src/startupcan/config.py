@@ -119,16 +119,29 @@ def _assert_unique_dev_no(name: str, items: list[dict]):
         dup = next(n for n in dev_nos if dev_nos.count(n) > 1)
         raise ValueError(f"{name}: dev_no={dup} occurs more than once.")
     
-def _assert_unique_can_fields(name: str, items: list[dict], *, strict_numbers: bool = True):
+def _assert_unique_can_fields(
+    name: str,
+    items: list[dict],
+    *,
+    strict_numbers: bool = True,
+    require_value_id: bool = False,
+):
     """
     Validate CAN ID usage within one list.
 
-    Rules:
-    - `cmd_id != answer_id` must always hold per device.
-    - If `strict_numbers=True`, no CAN number may appear twice anywhere
-      across cmd_id and answer_id of the whole list.
-    - If `strict_numbers=False`, duplicate numbers are allowed across devices,
-      but still not within one device.
+    Rules per device:
+    - cmd_id != answer_id
+    - if value_id is present (or required):
+        - cmd_id != value_id
+        - answer_id == value_id is allowed
+
+    Global uniqueness:
+    - if strict_numbers=True:
+        - all CAN IDs must be globally unique across devices
+        - exception: answer_id == value_id is allowed within the SAME device
+    - if strict_numbers=False:
+        - duplicates across devices are allowed
+        - only the per-device rules above are checked
 
     Args:
         name:
@@ -138,37 +151,86 @@ def _assert_unique_can_fields(name: str, items: list[dict], *, strict_numbers: b
             List of device dictionaries.
 
         strict_numbers:
-            Whether every CAN number in the list must be unique.
+            Whether CAN IDs must be globally unique across devices.
+
+        require_value_id:
+            Whether every entry must contain value_id.
 
     Raises:
         ValueError:
             If the validation fails.
     """
-    numbers: list[int] = []
+    # Tracks globally used CAN IDs and where they were first seen.
+    # Example:
+    #   0x103 -> "dev_no=1.answer_id"
+    seen: dict[int, str] = {}
 
     for d in (items or []):
+        dev_no = d.get("dev_no", "?")
         cmd = int(d["cmd_id"])
         ans = int(d["answer_id"])
 
-        # 1) pro Gerät: cmd != ans
+        # -------------------------------------------------------------
+        # Per-device validation
+        # -------------------------------------------------------------
         if cmd == ans:
             raise ValueError(
                 f"{name}: cmd_id and answer_id must not be identical "
-                f"(dev_no={d.get('dev_no','?')} ID=0x{cmd:X} / {cmd})."
+                f"(dev_no={dev_no} ID=0x{cmd:X} / {cmd})."
             )
 
-        numbers.append(cmd)
-        numbers.append(ans)
+        val = None
+        if "value_id" in d and d["value_id"] is not None:
+            val = int(d["value_id"])
 
-    if strict_numbers:
-        # 2) keine Zahl darf doppelt vorkommen
-        if len(numbers) != len(set(numbers)):
-            # Duplikat ermitteln
-            dup = next(x for x in numbers if numbers.count(x) > 1)
+            if cmd == val:
+                raise ValueError(
+                    f"{name}: cmd_id and value_id must not be identical "
+                    f"(dev_no={dev_no} ID=0x{cmd:X} / {cmd})."
+                )
+        elif require_value_id:
+            raise ValueError(f"{name}: value_id missing for dev_no={dev_no}")
+
+        # -------------------------------------------------------------
+        # No global uniqueness check required
+        # -------------------------------------------------------------
+        if not strict_numbers:
+            continue
+
+        # -------------------------------------------------------------
+        # Global uniqueness:
+        # - cmd must be unique everywhere
+        # - ans must be unique everywhere
+        # - value must be unique everywhere
+        # - EXCEPTION: value_id may equal answer_id of the SAME device
+        # -------------------------------------------------------------
+
+        if cmd in seen:
             raise ValueError(
-                f"{name}: CAN ID 0x{dup:X} ({dup}) occurs more than once "
-                "(neither cmd_id nor answer_id may be duplicated)."
+                f"{name}: CAN ID 0x{cmd:X} ({cmd}) occurs more than once "
+                f"(already used by {seen[cmd]})."
             )
+        seen[cmd] = f"dev_no={dev_no}.cmd_id"
+
+        if ans in seen:
+            raise ValueError(
+                f"{name}: CAN ID 0x{ans:X} ({ans}) occurs more than once "
+                f"(already used by {seen[ans]})."
+            )
+        seen[ans] = f"dev_no={dev_no}.answer_id"
+
+        if val is not None:
+            # Allowed special case:
+            # answer_id == value_id within the same device
+            if val == ans:
+                continue
+
+            if val in seen:
+                raise ValueError(
+                    f"{name}: CAN ID 0x{val:X} ({val}) occurs more than once "
+                    f"(already used by {seen[val]})."
+                )
+            seen[val] = f"dev_no={dev_no}.value_id"
 
 def _assert_same_dev_nos(name_a: str, a: list[dict], name_b: str, b: list[dict]):
     """
@@ -201,6 +263,37 @@ def _assert_same_dev_nos(name_a: str, a: list[dict], name_b: str, b: list[dict])
             f"Only in {name_a}: {only_a} | Only in {name_b}: {only_b}"
         )
 
+def _assert_default_ids_valid(cmd: int, ans: int, value: int):
+    if cmd == ans:
+        raise ValueError(
+            "devices.config.assign: default_cmd_id and default_ans_id must not be identical."
+        )
+    if cmd == value:
+        raise ValueError(
+            "devices.config.assign: default_cmd_id and default_value_id must not be identical."
+        )
+
+def _assert_can_id_range(name: str, items: list[dict], *, require_value_id: bool = False):
+    bad = []
+
+    for d in (items or []):
+        dev_no = int(d["dev_no"])
+
+        for field in ("cmd_id", "answer_id"):
+            val = int(d[field])
+            if not (0 <= val <= 0x7FF):
+                bad.append((dev_no, field, val))
+
+        if "value_id" in d and d["value_id"] is not None:
+            val = int(d["value_id"])
+            if not (0 <= val <= 0x7FF):
+                bad.append((dev_no, "value_id", val))
+        elif require_value_id:
+            bad.append((dev_no, "value_id", None))
+
+    if bad:
+        raise ValueError(f"{name}: invalid 11-bit CAN IDs: {bad}")
+    
 def _detect_and_validate_sn_mode(new_ids: list[dict]) -> bool:
     """
     Detect and validate serial-number mapping mode.
@@ -277,6 +370,9 @@ def _norm_list(lst):
             "cmd_id": _parse_hex(d["cmd_id"]),
             "answer_id": _parse_hex(d["answer_id"]),
         }
+
+        if "value_id" in d and d["value_id"] is not None:
+            item["value_id"] = _parse_hex(d["value_id"])
         
         if "serial" in d and d["serial"] is not None:
             item["serial"] = int(str(d["serial"]).strip())
@@ -342,18 +438,26 @@ def load_config(path: Path) -> dict:
     default_cmd_id = _parse_hex(assign.get("default_cmd_id", "0x100"))
     default_ans_id = _parse_hex(assign.get("default_ans_id", "0x101"))
     default_canbaud = int(assign.get("default_canbaud", 1000000))
+    default_value_id = _parse_hex(assign.get("default_value_id", "0x101"))
 
+    
     if default_canbaud not in _ALLOWED_CAN_BAUDS:
         raise ValueError(f"devices.config.assign.default_canbaud={default_canbaud} is invalid.")
     
     if canbaud not in _ALLOWED_CAN_BAUDS:
         raise ValueError(f"dll.canbaud={canbaud} is invalid.")
+    
+    _assert_default_ids_valid(int(default_cmd_id), int(default_ans_id), int(default_value_id))
 
-    if int(default_cmd_id) == int(default_ans_id):
-        raise ValueError(
-            "devices.config.assign: default_cmd_id and default_ans_id must not be identical "
-            f"(ID=0x{int(default_cmd_id):X})."
-        )
+    for field_name, val in (
+        ("default_cmd_id", int(default_cmd_id)),
+        ("default_ans_id", int(default_ans_id)),
+        ("default_value_id", int(default_value_id)),
+    ):
+        if not (0 <= val <= 0x7FF):
+            raise ValueError(
+                f"devices.config.assign.{field_name}=0x{val:X} ({val}) is not a valid 11-bit CAN ID."
+            )
 
     # -------------------------------------------------------------------------
     # Current / new blocks
@@ -374,9 +478,19 @@ def load_config(path: Path) -> dict:
         _assert_unknown_is_bool("devices.config.current.ids", device_current)
         _assert_unique_dev_no("devices.config.current.ids", device_current)
         _assert_canbaud_allowed("devices.config.current.ids", device_current)
+        _assert_can_id_range(
+            "devices.config.current.ids",
+            device_current,
+            require_value_id=False,
+        )
 
     if device_new_raw:
         _assert_unique_dev_no("devices.config.new.ids", device_new_raw)
+        _assert_can_id_range(
+            "devices.config.new.ids",
+            device_new_raw,
+            require_value_id=not new_default_mode,
+        )
 
     # Current IDs may contain duplicates across devices because StartupCAN
     # processes one device at a time.
@@ -384,7 +498,8 @@ def load_config(path: Path) -> dict:
         _assert_unique_can_fields(
             "devices.config.current.ids",
             device_current,
-            strict_numbers=False,   # <-- relaxed
+            strict_numbers=False,
+            require_value_id=False,  
         )
 
     # New IDs must be unique unless `new.default=true`, because in reset mode
@@ -393,7 +508,8 @@ def load_config(path: Path) -> dict:
         _assert_unique_can_fields(
             "devices.config.new.ids",
             device_new_raw,
-            strict_numbers=not new_default_mode,      # <-- WICHTIG
+            strict_numbers=not new_default_mode,
+            require_value_id=not new_default_mode,      
         )
 
     # -------------------------------------------------------------------------
@@ -448,7 +564,7 @@ def load_config(path: Path) -> dict:
 
         # Start endpoint is always the default endpoint
         device_config = [
-            {"dev_no": int(n), "cmd_id": default_cmd_id, "answer_id": default_ans_id}
+            {"dev_no": int(n), "cmd_id": default_cmd_id, "answer_id": default_ans_id, "value_id": default_value_id,}
             for n in dev_nos_for_run
         ]
 
@@ -466,7 +582,7 @@ def load_config(path: Path) -> dict:
 
         # Target endpoint is always the shared default endpoint
         device_new = [
-            {"dev_no": int(n), "cmd_id": default_cmd_id, "answer_id": default_ans_id}
+            {"dev_no": int(n), "cmd_id": default_cmd_id, "answer_id": default_ans_id, "value_id": default_value_id,}
             for n in dev_nos_for_run
         ]
 
@@ -485,7 +601,12 @@ def load_config(path: Path) -> dict:
         "DEVICE_CONFIG": device_config,
         "DEVICE_CURRENT": device_current,   # optional
         "DEVICE_NEW": device_new,           # Ziel-IDs
-        "ASSIGN": {"DEFAULT_CMD_ID": default_cmd_id, "DEFAULT_ANS_ID": default_ans_id, "DEFAULT_CANBAUD": default_canbaud,},
+        "ASSIGN": {
+            "DEFAULT_CMD_ID": default_cmd_id,
+            "DEFAULT_ANS_ID": default_ans_id,
+            "DEFAULT_VALUE_ID": default_value_id,
+            "DEFAULT_CANBAUD": default_canbaud,
+        },
     }
 
 # -----------------------------------------------------------------------------
@@ -542,4 +663,5 @@ DEVICE_NEW = CONFIG["DEVICE_NEW"]
 ASSIGN = CONFIG["ASSIGN"]
 DEFAULT_CMD_ID = ASSIGN["DEFAULT_CMD_ID"]
 DEFAULT_ANS_ID = ASSIGN["DEFAULT_ANS_ID"]
+DEFAULT_VALUE_ID = ASSIGN["DEFAULT_VALUE_ID"]
 DEFAULT_CANBAUD = ASSIGN["DEFAULT_CANBAUD"]

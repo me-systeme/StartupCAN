@@ -23,8 +23,10 @@ def _record_result(
     state: str,
     cmd_old: int,
     ans_old: int,
+    value_old: int | None,
     cmd_new: int,
     ans_new: int,
+    value_new: int,
     baud_old: int,
     baud_new: int,
     warn_unknown: bool = False,
@@ -55,8 +57,10 @@ def _record_result(
         "state": state,
         "cmd_old": int(cmd_old),
         "ans_old": int(ans_old),
+        "value_old": int(value_old) if value_old is not None else None,
         "cmd_new": int(cmd_new),
         "ans_new": int(ans_new),
+        "value_new": int(value_new),
         "baud_old": int(baud_old),
         "baud_new": int(baud_new),
     }
@@ -67,6 +71,9 @@ def _record_result(
         _warn_unknown(dev_no, sn, where=warn_where)
 
     return True
+
+def _fmt_optional_can_id(x: int | None) -> str:
+    return fmt_can_id(x) if x is not None else "?"
 
 def _print_summary(rows: list[dict]):
     """
@@ -89,8 +96,10 @@ def _print_summary(rows: list[dict]):
         ok = r["ok"]
         cmd_old = r["cmd_old"]
         ans_old = r["ans_old"]
+        val_old = r["value_old"]
         cmd_new = r["cmd_new"]
         ans_new = r["ans_new"]
+        val_new = r["value_new"]
         serial = r.get("serial")
         tag = f"DEV {dev_no} (SN={serial if serial is not None else '?'})"
         state = r.get("state", "")
@@ -98,8 +107,8 @@ def _print_summary(rows: list[dict]):
         print(
             f"{tag}: "
             f"{'OK ' if ok else 'FAIL'} | "
-            f"{fmt_can_id(cmd_old)}/{fmt_can_id(ans_old)}  ->  "
-            f"{fmt_can_id(cmd_new)}/{fmt_can_id(ans_new)}"
+            f"CMD/ANS/VAL {fmt_can_id(cmd_old)}/{fmt_can_id(ans_old)}/{_fmt_optional_can_id(val_old)} -> "
+            f"{fmt_can_id(cmd_new)}/{fmt_can_id(ans_new)}/{fmt_can_id(val_new)}"
             f"{state_txt}"
         )
     print("=" * 80 + "\n")
@@ -149,21 +158,21 @@ def _effective_current_ids_from_results(results: list[dict]) -> list[dict]:
         state = r.get("state")  # "old"|"new"|"unknown"|None
 
         if state == "new":
-            cmd_eff, ans_eff = r["cmd_new"], r["ans_new"]
+            cmd_eff, ans_eff, value_eff = r["cmd_new"], r["ans_new"], r["value_new"]
             baud_eff = r.get("baud_new")
         elif state == "old":
-            cmd_eff, ans_eff = r["cmd_old"], r["ans_old"]
+            cmd_eff, ans_eff, value_eff = r["cmd_old"], r["ans_old"], r["value_old"]
             baud_eff = r.get("baud_old")
         elif state == "old_newbaud":
-            cmd_eff, ans_eff = r["cmd_old"], r["ans_old"]
+            cmd_eff, ans_eff, value_eff = r["cmd_old"], r["ans_old"], r["value_old"]
             baud_eff = r.get("baud_new")
         elif state == "new_oldbaud":
-            cmd_eff, ans_eff = r["cmd_new"], r["ans_new"]
+            cmd_eff, ans_eff, value_eff = r["cmd_new"], r["ans_new"], r["value_new"]
             baud_eff = r.get("baud_old")
         else:
             # Unknown means the actual endpoint could not be confirmed reliably.
             # Keep the old endpoint and mark the device as unknown.
-            cmd_eff, ans_eff = r["cmd_old"], r["ans_old"]
+            cmd_eff, ans_eff, value_eff = r["cmd_old"], r["ans_old"], r["value_old"]
             baud_eff = r.get("baud_old")
         
         item = {
@@ -171,6 +180,10 @@ def _effective_current_ids_from_results(results: list[dict]) -> list[dict]:
             "cmd_id": int(cmd_eff),
             "answer_id": int(ans_eff),
         }
+
+        if value_eff is not None:
+            item["value_id"] = int(value_eff)
+
         if r.get("serial") is not None:
             item["serial"] = int(r["serial"])
         
@@ -227,6 +240,10 @@ def _merge_current_ids(
         merged["dev_no"] = dn
         merged["cmd_id"] = int(u["cmd_id"])
         merged["answer_id"] = int(u["answer_id"])
+        
+        # Preserve an existing value_id if the updated subset does not provide one.
+        if "value_id" in u and u["value_id"] is not None:
+            merged["value_id"] = int(u["value_id"])
 
         if u.get("serial") is not None:
             merged["serial"] = int(u["serial"])

@@ -107,14 +107,14 @@ def _try_activate_n(gsv, dev_no, cmd, ans, *, canbaud: int | None = None, tries=
     ok, _ = _try_activate(gsv, dev_no, cmd, ans, canbaud=canbaud, tries=tries, delay=delay, read_sn=False, verbose=False)
     return ok
 
-def _verify_ids(gsv: GSV86CAN, dev_no: int, serial: int | None, exp_cmd: int, exp_ans: int, exp_canbaud: int, *, verbose: bool = True) -> bool:
+def _verify_ids(gsv: GSV86CAN, dev_no: int, serial: int | None, exp_cmd: int, exp_ans: int, exp_value: int | None, exp_canbaud: int, *, verbose: bool = True) -> bool:
     """
     Read back the device CAN settings and compare them with the expected values.
 
     Expected invariant in this application:
     - CMD_ID == exp_cmd
     - ANSWER_ID == exp_ans
-    - CV_ID == exp_ans
+    - VALUE_ID == exp_value (only if exp_value is known)
     - CANBAUD == exp_canbaud
 
     This function is used both for diagnostic logging and for hard workflow
@@ -129,19 +129,28 @@ def _verify_ids(gsv: GSV86CAN, dev_no: int, serial: int | None, exp_cmd: int, ex
         cv_read = gsv.get_can_settings(dev_no, CANSET_CAN_CV_VALUE_ID)
         canbaud_read = gsv.get_can_settings(dev_no,CANSET_CAN_BAUD_HZ)
 
-        ok = (cmd_read == exp_cmd and ans_read == exp_ans and cv_read == exp_ans and canbaud_read == exp_canbaud)
+        ok = (
+            cmd_read == exp_cmd and
+            ans_read == exp_ans and
+            canbaud_read == exp_canbaud and
+            (exp_value is None or cv_read == exp_value)
+        )
 
         tag = _fmt_dev(dev_no, serial)
 
         if verbose:
             print(f"[{tag}] verify CMD_ID   = {fmt_can_id(cmd_read)} (raw={cmd_read})")
             print(f"[{tag}] verify ANSWER_ID= {fmt_can_id(ans_read)} (raw={ans_read})")
-            print(f"[{tag}] verify CV_ID     = {fmt_can_id(cv_read)} (raw={cv_read})")
+            print(f"[{tag}] verify VALUE_ID = {fmt_can_id(cv_read)} (raw={cv_read})")
             print(f"[{tag}] verify CANBAUD= {canbaud_read}")
 
             if not ok:
-                print(f"[{tag}] WARN: verify differs from expected "
-                    f"(expected CMD={fmt_can_id(exp_cmd)} ANS={fmt_can_id(exp_ans)} CV={fmt_can_id(exp_ans)} CANBAUD={exp_canbaud})")
+                expected_value_txt = fmt_can_id(exp_value) if exp_value is not None else "not checked"
+                print(
+                    f"[{tag}] WARN: verify differs from expected "
+                    f"(expected CMD={fmt_can_id(exp_cmd)} ANS={fmt_can_id(exp_ans)} "
+                    f"VALUE={expected_value_txt} CANBAUD={exp_canbaud})"
+                )
         return ok
     
     except Exception as e:
@@ -155,6 +164,7 @@ def _apply_target_and_reconnect(
     serial: int | None,
     cmd_new: int,
     ans_new: int,
+    value_new: int,
     baud_new: int | None = None
 ) -> tuple[bool, int | None]:
     """
@@ -178,10 +188,10 @@ def _apply_target_and_reconnect(
     """
     try:
         # Write the new CAN IDs.
-        print(f"[{_fmt_dev(dev_no, serial)}] set NEW IDs: CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)} CV={fmt_can_id(ans_new)}")
+        print(f"[{_fmt_dev(dev_no, serial)}] set NEW IDs: CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)} VALUE={fmt_can_id(value_new)}")
         gsv.set_can_settings(dev_no, CANSET_CAN_IN_CMD_ID, cmd_new)
         gsv.set_can_settings(dev_no, CANSET_CAN_OUT_ANS_ID, ans_new)
-        gsv.set_can_settings(dev_no, CANSET_CAN_CV_VALUE_ID, ans_new)
+        gsv.set_can_settings(dev_no, CANSET_CAN_CV_VALUE_ID, value_new)
 
         # Optionally write the new baudrate.
         if baud_new is not None:
@@ -210,12 +220,12 @@ def _apply_target_and_reconnect(
 
         sn_out = sn2 if sn2 is not None else serial
 
-        ok_verify = _verify_ids(gsv, dev_no, sn_out, cmd_new, ans_new, activate_baud)
+        ok_verify = _verify_ids(gsv, dev_no, sn_out, cmd_new, ans_new, value_new, activate_baud)
 
         if not ok_verify:
             print(f"[{_fmt_dev(dev_no, sn_out)}] WARN: verification after re-activation "
                   f"does not match expected values "
-                  f"(expected CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)} CV={fmt_can_id(ans_new)} CANBAUD={activate_baud}).")
+                  f"(expected CMD={fmt_can_id(cmd_new)} ANS={fmt_can_id(ans_new)} VALUE={fmt_can_id(value_new)} CANBAUD={activate_baud}).")
 
         time.sleep(0.1)
 
@@ -234,8 +244,8 @@ def _apply_target_and_reconnect(
 def _probe_state_after_fail(
     gsv: GSV86CAN,
     dev_no: int,
-    cmd_old: int, ans_old: int,
-    cmd_new: int, ans_new: int,
+    cmd_old: int, ans_old: int, value_old: int | None,
+    cmd_new: int, ans_new: int, value_new: int,
     *,
     baud_old: int | None = None,
     baud_new: int | None = None,
@@ -261,7 +271,7 @@ def _probe_state_after_fail(
     _safe_release(gsv, dev_no, where="probe:pre")
     time.sleep(0.3)  
 
-    def _probe(label: str, cmd: int, ans: int, baud: int) -> bool:
+    def _probe(label: str, cmd: int, ans: int, value: int | None, baud: int) -> bool:
         """
         Try one specific endpoint/baudrate combination.
         """
@@ -271,45 +281,46 @@ def _probe_state_after_fail(
         if not ok:
             return False
         
-        ok_verify = _verify_ids(gsv, dev_no, None, cmd, ans, baud, verbose=False)
+        ok_verify = _verify_ids(gsv, dev_no, None, cmd, ans, value, baud, verbose=False)
 
         if ok_verify:
             print(
                 f"[DEV {dev_no}] Probe {label}: activation+verify OK "
-                f"(CMD={fmt_can_id(cmd)} ANS={fmt_can_id(ans)} CV={fmt_can_id(ans)} BAUD={baud})"
+                f"(CMD={fmt_can_id(cmd)} ANS={fmt_can_id(ans)} VALUE={fmt_can_id(value) if value is not None else '?'} BAUD={baud})"
             )
         else:
+            expected_value_txt = fmt_can_id(value) if value is not None else "?"
             print(
                 f"[DEV {dev_no}] Probe {label}: activation OK but verify mismatch "
-                f"(expected CMD={fmt_can_id(cmd)} ANS={fmt_can_id(ans)} CV={fmt_can_id(ans)} BAUD={baud})"
+                f"(expected CMD={fmt_can_id(cmd)} ANS={fmt_can_id(ans)} VALUE={expected_value_txt} BAUD={baud})"
             )
         
         _safe_release(gsv, dev_no, where=f"probe:{label}")
         return ok_verify
 
     # 1) old IDs + old baudrate
-    if _probe("old@oldbaud", cmd_old, ans_old, baud_old):
+    if _probe("old@oldbaud", cmd_old, ans_old, value_old, baud_old):
         print(f"[DEV {dev_no}] Probe success: state=old")
         return "old"
 
     # 2) new IDs + new baudrate
-    if _probe("new@newbaud", cmd_new, ans_new, baud_new):
+    if _probe("new@newbaud", cmd_new, ans_new, value_new, baud_new):
         print(f"[DEV {dev_no}] Probe success: state=new")
         return "new"
     
     # 3) Cross-check mixed endpoint/baudrate combinations
     if int(baud_old) != int(baud_new):
-        if _probe("old@newbaud", cmd_old, ans_old, baud_new):
+        if _probe("old@newbaud", cmd_old, ans_old, value_old, baud_new):
             print(f"[DEV {dev_no}] probe success: state=old_newbaud")
             return "old_newbaud"
-        if _probe("new@oldbaud", cmd_new, ans_new, baud_old):
+        if _probe("new@oldbaud", cmd_new, ans_new, value_new, baud_old):
             print(f"[DEV {dev_no}] probe success: state=new_oldbaud")
             return "new_oldbaud"
 
     print(f"[DEV {dev_no}] probes failed. CAN settings are unknown.")
     return "unknown"
 
-def _same_endpoint(cmd_a: int, ans_a: int, cmd_b: int, ans_b: int, baud_a: int, baud_b: int) -> bool:
+def _same_endpoint(cmd_a: int, ans_a: int, value_a: int | None, cmd_b: int, ans_b: int, value_b: int | None, baud_a: int, baud_b: int) -> bool:
     """
     Compare two planned CAN endpoints including baudrate.
 
@@ -318,4 +329,6 @@ def _same_endpoint(cmd_a: int, ans_a: int, cmd_b: int, ans_b: int, baud_a: int, 
         It does NOT verify the actual device readback state.
         In particular, it does not guarantee that CV_ID is correct.
     """
-    return int(cmd_a) == int(cmd_b) and int(ans_a) == int(ans_b) and int(baud_a) == int(baud_b)
+    if value_a is None or value_b is None:
+        return False
+    return int(cmd_a) == int(cmd_b) and int(ans_a) == int(ans_b) and int(value_a) == int(value_b) and int(baud_a) == int(baud_b)

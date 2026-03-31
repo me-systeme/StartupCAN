@@ -94,6 +94,7 @@ def _write_updated_yaml(
             **({} if drop_canbaud or d.get("canbaud") is None else {"canbaud": int(d["canbaud"])}),
             "cmd_id": _hex_str(int(d["cmd_id"])),
             "answer_id": _hex_str(int(d["answer_id"])),
+            **({"value_id": _hex_str(int(d["value_id"]))} if d.get("value_id") is not None else {}),
         }
         for d in current_ids
     ]

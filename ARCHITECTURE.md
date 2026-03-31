@@ -1,8 +1,6 @@
-# 25.03.2026
+# CAN Endpoint Consistency and CV_ID Handling
 
-## CAN Endpoint Consistency and CV_ID Handling
-
-### Context
+## Context
 
 GSV CAN devices expose multiple CAN-related identifiers:
 
@@ -23,7 +21,7 @@ Additionally, the workflow includes a **“same endpoint skip” optimization**,
 
 ---
 
-### Decision
+## Decision
 
 StartupCAN enforces the following invariant:
 
@@ -74,7 +72,7 @@ This leads to the following design decisions:
 
 ---
 
-### Rationale
+## Rationale
 
 This approach intentionally trades flexibility for robustness and simplicity.
 
@@ -100,7 +98,7 @@ Therefore, **readback verification is treated as the source of truth**.
 
 ---
 
-### Consequences
+## Consequences
 
 **Positive:**
 
@@ -117,7 +115,7 @@ Therefore, **readback verification is treated as the source of truth**.
 
 ---
 
-### Alternatives considered
+## Alternatives considered
 
 1. **Expose CV_ID in YAML**
 
@@ -143,7 +141,7 @@ Therefore, **readback verification is treated as the source of truth**.
 
 ---
 
-### Summary
+## Summary
 
 StartupCAN defines a CAN endpoint as:
 

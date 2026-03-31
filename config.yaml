@@ -62,6 +62,10 @@ devices:
       # Must be different from default_cmd_id
       default_ans_id: "0x101"
 
+      # Default CAN value ID used in default mode.
+      # String (hex, 11-bit CAN ID)
+      default_value_id: "0x101"
+
     # -------------------------------------------------------------------------
     # Current device state
     # -------------------------------------------------------------------------
@@ -81,30 +85,29 @@ devices:
       # - duplicates across devices are allowed (only one device is connected)
       #
       # Optional fields:
+      # - value_id → used for validation 
       # - serial   → used for validation
       # - canbaud  → overrides dll.canbaud for activation
       # - unknown  → devices may be marked using unknown: true in current.ids
       #
       # If canbaud is missing → dll.canbaud is used
       #
-      # NOTE:
-      # the can value id (cv_id) is not configurable.
-      # StartupCAN always enforces:
-      # cv_id = answer_id
       ids:
         - dev_no: 1
           serial: 25455437
-          canbaud: 250000
-          cmd_id: '0x202'
-          answer_id: '0x203'
+          cmd_id: '0x102'
+          answer_id: '0x103'
+          value_id: '0x103'
         - dev_no: 2
           serial: 25455423
           cmd_id: '0x104'
           answer_id: '0x105'
+          value_id: '0x105'
         - dev_no: 3
           serial: 25455439
           cmd_id: '0x106'
           answer_id: '0x107'
+          value_id: '0x107'
     new:
       # If true:
       # - StartupCAN ignores `new.ids`
@@ -125,17 +128,25 @@ devices:
       # - serial → enables mapping by serial instead of dev_no
       #   (if used, ALL entries must contain serial)
       #
-      # NOTE:
-      # the can value id (cv_id) is not configurable.
-      # StartupCAN always enforces:
-      # cv_id = answer_id
+      # value_id configures the CAN value frame ID (CV_ID).
+      # It may be identical to answer_id, but does not have to be.
+      #
+      # Rules:
+      # - value_id is required if new.default = false
+      # - in default modes, assign.default_value_id is used
       ids: 
         - dev_no: 1
-          cmd_id: "0x102"
-          answer_id: "0x103"
+          serial: 25455437
+          cmd_id: '0x102'
+          answer_id: '0x103'
+          value_id: '0x103'
         - dev_no: 2
-          cmd_id: "0x104"
-          answer_id: "0x105"
+          serial: 25455423
+          cmd_id: '0x104'
+          answer_id: '0x105'
+          value_id: '0x105'
         - dev_no: 3
-          cmd_id: "0x106"
-          answer_id: "0x107"
+          serial: 25455439
+          cmd_id: '0x106'
+          answer_id: '0x107'
+          value_id: '0x107'

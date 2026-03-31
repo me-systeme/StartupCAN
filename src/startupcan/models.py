@@ -101,12 +101,14 @@ class DevicePlan:
     dev_no: int
     cmd_old: int
     ans_old: int
+    value_old: int | None
     baud_old: int
     cmd_new: int | None
     ans_new: int | None
+    value_new: int | None
     baud_new: int
 
-    def with_new_ids(self, cmd_new: int, ans_new: int) -> "DevicePlan":
+    def with_new_ids(self, cmd_new: int, ans_new: int, value_new: int) -> "DevicePlan":
         """
         Return a copy of this plan with resolved target CAN IDs.
 
@@ -117,25 +119,40 @@ class DevicePlan:
             dev_no=self.dev_no,
             cmd_old=self.cmd_old,
             ans_old=self.ans_old,
+            value_old=self.value_old,
             baud_old=self.baud_old,
             cmd_new=int(cmd_new),
             ans_new=int(ans_new),
+            value_new=int(value_new),
             baud_new=self.baud_new,
         )
     def with_safe_new_ids(self) -> "DevicePlan":
         """
         Return a copy of this plan with guaranteed non-None target IDs.
 
-        If cmd_new or ans_new is missing, the corresponding old value is used as
-        a safe fallback. This is useful in failure handling paths where result
-        recording and probing expect concrete values.
+        This helper is only meant for safe failure handling paths such as:
+        - result recording
+        - fallback probing
+        - interruption/error handling
+
+        It does not imply that these fallback IDs are confirmed to be active on the device.
         """
         return DevicePlan(
             dev_no=self.dev_no,
             cmd_old=self.cmd_old,
             ans_old=self.ans_old,
+            value_old=self.value_old,
             baud_old=self.baud_old,
             cmd_new=int(self.cmd_new) if self.cmd_new is not None else int(self.cmd_old),
             ans_new=int(self.ans_new) if self.ans_new is not None else int(self.ans_old),
+            value_new=(
+                int(self.value_new)
+                if self.value_new is not None
+                else (
+                    int(self.value_old)
+                    if self.value_old is not None
+                    else int(self.ans_old)
+                )
+            ),
             baud_new=self.baud_new,
         )
