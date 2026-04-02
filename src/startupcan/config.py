@@ -133,7 +133,11 @@ def _assert_unique_can_fields(
     - cmd_id != answer_id
     - if value_id is present (or required):
         - cmd_id != value_id
-        - answer_id == value_id is allowed
+        - answer_id == value_id is allowed (common device pattern)
+
+    Notes:
+    - value_id is treated as a third CAN endpoint and participates in
+    uniqueness checks unless explicitly exempted
 
     Global uniqueness:
     - if strict_numbers=True:
@@ -306,6 +310,8 @@ def _detect_and_validate_sn_mode(new_ids: list[dict]) -> bool:
 
     Mixed mode is not allowed.
 
+    In SN_MODE, target CAN IDs are resolved dynamically after activation.
+
     Args:
         new_ids:
             List of target device entries.
@@ -371,12 +377,18 @@ def _norm_list(lst):
             "answer_id": _parse_hex(d["answer_id"]),
         }
 
+        # Optional value_id:
+        # - may be missing in YAML (e.g. legacy configs or partial knowledge)
+        # - is preserved if present, but not required in all modes
         if "value_id" in d and d["value_id"] is not None:
             item["value_id"] = _parse_hex(d["value_id"])
         
         if "serial" in d and d["serial"] is not None:
             item["serial"] = int(str(d["serial"]).strip())
 
+        # unknown flag:
+        # - indicates that the actual device state could not be verified
+        # - stored as best-known state, not guaranteed to be correct
         if "unknown" in d:
             item["unknown"] = bool(d["unknown"])
         
@@ -520,9 +532,18 @@ def load_config(path: Path) -> dict:
             "Invalid configuration: current.default=true and new.default=true is not allowed."
         )
     
-    # Case 1:
+    # Case 1: Re-address devices (normal operation)
     # current.default = false
     # new.default     = false
+    #
+    # Behavior:
+    # - devices start with known current CAN settings (current.ids)
+    # - devices are reconfigured to new.ids
+    # - mapping is either by dev_no or serial (SN_MODE)
+    #
+    # Requirements:
+    # - current.ids and new.ids must contain the same dev_no set
+    # - value_id is required in new.ids (fully specified target endpoint)
     if (not current_default_mode) and (not new_default_mode):
         if not device_current:
             raise ValueError("current.default=false & new.default=false: devices.config.current.ids must not be empty.")
@@ -563,6 +584,7 @@ def load_config(path: Path) -> dict:
         device_new = device_new_raw
 
         # Start endpoint is always the default endpoint
+        # (devices are expected to be in factory/default CAN state)
         device_config = [
             {"dev_no": int(n), "cmd_id": default_cmd_id, "answer_id": default_ans_id, "value_id": default_value_id,}
             for n in dev_nos_for_run
@@ -581,6 +603,7 @@ def load_config(path: Path) -> dict:
         dev_nos_for_run = [d["dev_no"] for d in device_current] 
 
         # Target endpoint is always the shared default endpoint
+        # (all devices will end up with identical CAN IDs → must NOT be used together)
         device_new = [
             {"dev_no": int(n), "cmd_id": default_cmd_id, "answer_id": default_ans_id, "value_id": default_value_id,}
             for n in dev_nos_for_run

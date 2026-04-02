@@ -73,6 +73,10 @@ class DevicePlan:
     - new/target/default endpoint:
         cmd_new, ans_new, baud_new
 
+    - value_old / value_new:
+        CAN VALUE ID (CV ID) used for cyclic value transmission.
+        May be None if not known at planning time (e.g. SN_MODE before resolution).
+
     Attributes:
         dev_no:
             Logical device number from the YAML configuration.
@@ -136,6 +140,13 @@ class DevicePlan:
         - interruption/error handling
 
         It does not imply that these fallback IDs are confirmed to be active on the device.
+
+        These values are used as best-effort placeholders for:
+        - result recording
+        - state probing
+        - unknown-state handling
+
+        They should not be interpreted as verified device configuration.
         """
         return DevicePlan(
             dev_no=self.dev_no,

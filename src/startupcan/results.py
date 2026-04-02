@@ -47,6 +47,10 @@ def _record_result(
 
     If requested, an additional warning is printed for state="unknown".
 
+    Note:
+    - unknown state means the effective CAN configuration could not be
+    reliably determined, not necessarily that the device is misconfigured.
+
     Returns:
         already_recorded
     """
@@ -88,9 +92,9 @@ def _print_summary(rows: list[dict]):
     - optional detected state
     """
 
-    print("\n" + "=" * 80)
+    print("\n" + "=" * 100)
     print("Summary")
-    print("=" * 80)
+    print("=" * 100)
     for r in rows:
         dev_no = r["dev_no"]
         ok = r["ok"]
@@ -111,7 +115,7 @@ def _print_summary(rows: list[dict]):
             f"{fmt_can_id(cmd_new)}/{fmt_can_id(ans_new)}/{fmt_can_id(val_new)}"
             f"{state_txt}"
         )
-    print("=" * 80 + "\n")
+    print("=" * 100 + "\n")
 
 def _all_ok(results: list[dict], expected: int) -> bool:
     """
@@ -171,7 +175,10 @@ def _effective_current_ids_from_results(results: list[dict]) -> list[dict]:
             baud_eff = r.get("baud_old")
         else:
             # Unknown means the actual endpoint could not be confirmed reliably.
-            # Keep the old endpoint and mark the device as unknown.
+            # Strategy:
+            # - keep the last known (old) endpoint as best-effort information
+            # - mark the entry with unknown=true to signal uncertainty
+            # - this preserves usability while making the uncertainty explicit
             cmd_eff, ans_eff, value_eff = r["cmd_old"], r["ans_old"], r["value_old"]
             baud_eff = r.get("baud_old")
         
@@ -242,6 +249,8 @@ def _merge_current_ids(
         merged["answer_id"] = int(u["answer_id"])
         
         # Preserve an existing value_id if the updated subset does not provide one.
+        # This is important for unknown states where value_id could not be verified
+        # but a previously known value should not be lost.
         if "value_id" in u and u["value_id"] is not None:
             merged["value_id"] = int(u["value_id"])
 

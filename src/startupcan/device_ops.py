@@ -117,6 +117,10 @@ def _verify_ids(gsv: GSV86CAN, dev_no: int, serial: int | None, exp_cmd: int, ex
     - VALUE_ID == exp_value (only if exp_value is known)
     - CANBAUD == exp_canbaud
 
+    Note:
+    - VALUE_ID is optional in some workflows; if exp_value is None,
+    it is not considered for validation.
+
     This function is used both for diagnostic logging and for hard workflow
     decisions such as state probing and skip prevention.
 
@@ -325,9 +329,9 @@ def _same_endpoint(cmd_a: int, ans_a: int, value_a: int | None, cmd_b: int, ans_
     Compare two planned CAN endpoints including baudrate.
 
     Note:
-        This only compares the planned configuration values.
-        It does NOT verify the actual device readback state.
-        In particular, it does not guarantee that CV_ID is correct.
+    - All fields including value_id and baudrate must match.
+    - If value_id is unknown (None), endpoints are considered NOT equal.
+    - This ensures we do not skip reconfiguration based on incomplete data.
     """
     if value_a is None or value_b is None:
         return False

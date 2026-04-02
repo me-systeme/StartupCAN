@@ -85,6 +85,10 @@ def _write_updated_yaml(
     new = config.setdefault("new", {})
 
     # Update the "current" section to reflect the detected actual state
+    # including:
+    # - best-known CAN IDs
+    # - optional serial numbers
+    # - unknown=true flags for uncertain states
     current["default"] = bool(current_default)
     current["ids"] = [
         {

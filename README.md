@@ -52,9 +52,9 @@ flowchart TD
   B -->|OK| C["2. Serial check<br/>if serial is set in current.ids and/or new.ids"]
 
   C -->|FAIL| F2["Serial mismatch / serial unreadable / target IDs could not be determined"]
-  C -->|OK| D["3. Read back CAN settings<br/>(CMD / ANS / CV / BAUD)"]
+  C -->|OK| D["3. Read back CAN settings<br/>(CMD / ANS / VALUE / BAUD)"]
 
-  D -->|OK/ not OK| E["4. Check same endpoint?<br/>Skip only if plan matches AND device readback is fully correct"]
+  D -->|OK/ not OK| E["4. Check same endpoint?<br/>Skip only if full old/new plan matches and device readback is fully correct"]
   
   E -->|No| F["5. Set new IDs and baudrate<br/>Reset → Release<br/>Re-Activate (Retry)<br/>Verify"]
   E -->|Yes| F3["SUCCESS<br/>current.ids = new.ids"]
@@ -64,20 +64,27 @@ flowchart TD
 
 ``` 
 
-## Internal CAN setting rule
+## VALUE_ID handling
 
-StartupCAN treats the CAN value frame ID (`CV_ID`) as an internal consistency rule:
-
-* `CV_ID = ANSWER_ID`
+StartupCAN treats the CAN value frame ID (`VALUE_ID`, sometimes also called `CV_ID`)
+as a real part of the CAN endpoint.
 
 This means:
 
-- `CV_ID` is always set to the same value as `ANSWER_ID`
-- `CV_ID` is verified during readback and state probing
-- `CV_ID` is intentionally **not** stored separately in YAML
+- `VALUE_ID` is configured explicitly in `new.ids`
+- `VALUE_ID` is written explicitly during reconfiguration
+- `VALUE_ID` is verified during readback if an expected value is known
+- `current.ids[*].value_id` is optional
+- `new.ids[*].value_id` is required when `new.default=false`
 
-This keeps the YAML configuration simple while still ensuring that the effective
-device CAN settings are internally consistent.
+Important behavior:
+
+- if `current.ids[*].value_id` is missing, StartupCAN does **not** guess it
+- in that case, `VALUE_ID` is not validated for the old state
+- same-endpoint skip is only allowed if both old and new `VALUE_ID` are known
+- `VALUE_ID` is only written to `config.updated.yaml` if it is known
+
+This keeps the workflow safe while allowing devices where `VALUE_ID != ANSWER_ID`.
 
 
 ## Requirements
@@ -278,7 +285,7 @@ Each device is processed sequentially:
 
 * optionally checked (serial number / CAN settings)
 
-* changed to the **new IDs** and **new baudrate**
+* changed to the **new CMD / ANSWER / VALUE IDs** and **new baudrate**
 
 * verified via reset / release / re-activate
 
@@ -311,7 +318,7 @@ Each device is processed sequentially:
 
 * optionally checked (serial number / CAN settings)
 
-* changed to the **new IDs** and **new baudrate**
+* changed to the **new CMD / ANSWER / VALUE IDs** and **new baudrate**
 
 * verified via reset / release / re-activate
 
@@ -332,6 +339,8 @@ In this mode, the goal is to reset devices back to the default CAN settings:
 
 * `default_ans_id`
 
+* `default_value_id`
+
 * `default_canbaud`
 
 For safety, only one device may be connected at a time.
@@ -344,7 +353,7 @@ Each device is processed sequentially:
 
 * optionally checked (serial number / CAN settings)
 
-* changed to the **default IDs** and **default baudrate**
+* changed to the **default CMD / ANSWER / VALUE IDs** and **default baudrate**
 
 * verified via reset / release / re-activate
 
@@ -363,10 +372,16 @@ At the end, devices **must not be connected together on the bus**.
 ### Case 1:
 
 * **old IDs** are the IDs in `current.ids`
+  * `cmd_id`
+  * `answer_id`
+  * optional `value_id`
 
 * **old baudrate** is either the baudrate (`canbaud`) in `current.ids` or `dll.canbaud` as fallback
 
 * **new IDs** are the IDs in `new.ids`
+  * `cmd_id`
+  * `answer_id`
+  * required `value_id`
 
 * **new baudrate** is the baudrate in `dll.canbaud`
  
@@ -374,10 +389,16 @@ At the end, devices **must not be connected together on the bus**.
 ### Case 2:
 
 * **old IDs** are the **default IDs**
+  * `default_cmd_id`
+  * `default_ans_id`
+  * `default_value_id`
 
 * **old baudrate** is the **default baudrate**
 
 * **new IDs** are the IDs in `new.ids`
+  * `cmd_id`
+  * `answer_id`
+  * required `value_id`
 
 * **new baudrate** is the baudrate in `dll.canbaud`
 
@@ -385,10 +406,16 @@ At the end, devices **must not be connected together on the bus**.
 ### Case 3:
 
 * **old IDs** are the IDs in `current.ids`
+  * `cmd_id`
+  * `answer_id`
+  * optional `value_id`
 
 * **old baudrate** is either the baudrate (`canbaud`) in `current.ids` or `dll.canbaud` as fallback
 
 * **new IDs** are the **default IDs**
+  * `default_cmd_id`
+  * `default_ans_id`
+  * `default_value_id`
 
 * **new baudrate** is the **default baudrate**
 
@@ -404,7 +431,7 @@ A state probe is only considered successful if:
 * the device readback confirms:
     * CMD ID is correct
     * ANSWER ID is correct
-    * CV ID equals ANSWER ID
+    * VALUE ID is correct, if the expected `value_id` is known for that state
     * baudrate is correct
 
 Possible states:
@@ -418,8 +445,9 @@ Possible states:
 
 * **state = "new_oldbaud"** → device has the **new IDs** and the **old baudrate**
 
-* **state = "unknown"** → neither old nor new nor mixed states could be activated successfully. This also includes cases where activation works but the readback is not fully
-consistent (for example, if `CV_ID` does not match `ANSWER_ID`).
+* **state = "unknown"** → neither old nor new nor mixed states could be confirmed reliably.
+  This also includes cases where activation works but the readback does not match
+  the expected tested state.
 
 
 ### YAML update behavior depending on state:
@@ -434,7 +462,8 @@ the resulting configuration (`config.updated.yaml`) is written based on the dete
 
 * **state = "new_oldbaud"** → `current.ids` is updated with **new IDs** and **old baudrate**
 
-* **state="unknown"** → `current.ids` remains on **old IDs** and **old baudrate**, and `unknown: true` is added as a warning flag
+* **state="unknown"** → `current.ids` remains on **old IDs** and **old baudrate**, and `unknown: true` is added as a warning flag.
+  If an old `value_id` was known before, it is preserved. If it was unknown, it remains absent.
 
 
 ## Detailed process
@@ -484,20 +513,20 @@ Note: in all serial-check failure cases the device had already been activated, s
 
 
 
-### Step 3 – Read back CAN settings (CMD / ANS / CV / BAUD)
+### Step 3 – Read back CAN settings (CMD / ANS / VALUE / BAUD)
 
 ```mermaid
 flowchart TD
-A["3. Read back CAN settings<br/>(CMD / ANS / CV / BAUD)"]
+A["3. Read back CAN settings<br/>(CMD / ANS / VALUE / BAUD)"]
 ``` 
 
-* `get_can_settings` reads CMD ID / ANS ID / CV ID / baudrate from the device
+* `get_can_settings` reads CMD ID / ANS ID / VALUE ID / baudrate from the device
 
-* StartupCAN expects the following invariant:
+* StartupCAN verifies the following values:
 
     * `CMD_ID == expected cmd_id`
     * `ANSWER_ID == expected answer_id`
-    * `CV_ID == expected answer_id`
+    * `VALUE_ID == expected value_id` (only if the expected old `value_id` is known)
     * `CANBAUD == expected baudrate`
 
 * if this check fails, a warning is printed
@@ -505,8 +534,11 @@ A["3. Read back CAN settings<br/>(CMD / ANS / CV / BAUD)"]
 **Important:** failure here does **not** stop the workflow.
 
 However, if the planned old and new endpoint are identical, StartupCAN only
-skips reconfiguration if this device readback is fully correct.
-Otherwise the settings are written again.
+skips reconfiguration if the full endpoint is known and the device readback is
+fully correct.
+
+If the old `value_id` is unknown, StartupCAN does not skip and instead writes
+the target settings again.
 
 
 
@@ -525,11 +557,13 @@ The device is skipped only if all of the following are true:
 
 * planned old CMD ID == planned new CMD ID
 * planned old ANSWER ID == planned new ANSWER ID
+* planned old VALUE ID == planned new VALUE ID
 * planned old baudrate == planned new baudrate
+* old `value_id` is known
 * device readback confirms:
     * CMD ID is correct
     * ANSWER ID is correct
-    * CV ID equals ANSWER ID
+    * VALUE ID is correct
     * baudrate is correct
 
 If this readback is not fully correct, StartupCAN does **not** skip the device.
@@ -548,7 +582,7 @@ A["5. Set new IDs and baudrate <br/>Reset → Release<br/>Re-Activate (Retry)<br
 
 * `set_can_settings(CANSET_CAN_OUT_ANS_ID, ans_new)`
 
-* `set_can_settings(CANSET_CAN_CV_VALUE_ID, ans_new)`
+* `set_can_settings(CANSET_CAN_CV_VALUE_ID, value_new)`
 
 * `set_can_settings(CANSET_CAN_BAUD_HZ, int(baud_new))`
 
@@ -564,9 +598,9 @@ A["5. Set new IDs and baudrate <br/>Reset → Release<br/>Re-Activate (Retry)<br
 
 * final `release()`
 
-StartupCAN always enforces:
+StartupCAN always writes the configured target VALUE ID explicitly:
 
-* `CV_ID = ANSWER_ID`
+* `VALUE_ID = value_new`
 
 In Case 3, StartupCAN performs an additional step after a successful reconfiguration:
 
@@ -591,6 +625,7 @@ A["SUCCESS<br/>current.ids = new IDs"]
 If a device was successfully reconfigured (`ok=True`):
 
 * the resulting configuration (`config.updated.yaml`) stores the new IDs
+  including `value_id`
 
 * optionally the serial number and baudrate are also stored
 
@@ -715,7 +750,7 @@ A["Serial mismatch / unreadable / target IDs could not be determined"]
 
 
 
-### 3. Read back CAN settings (CMD / ANS / CV / BAUD) (Step 3) fails
+### 3. Read back CAN settings (CMD / ANS / VALUE / BAUD) (Step 3) fails
 
 ```mermaid
 flowchart TD
@@ -752,10 +787,11 @@ This is not really a failure. The device is simply skipped.
 The device is skipped only if:
 
 * the planned old endpoint equals the planned new endpoint, and
+* old `value_id` is known
 * device readback confirms:
   * CMD ID is correct
   * ANSWER ID is correct
-  * CV ID equals ANSWER ID
+  * VALUE ID is correct
   * baudrate is correct
 
 If the planned endpoint is identical but the device readback is not fully correct,
@@ -804,7 +840,16 @@ A["State probe<br/>old / new / old_newbaud / new_oldbaud / unknown"]
 
 ## Device configuration (`devices.config`)
 
-The configuration consists of two main lists:
+The configuration consists of two main lists.
+
+Each CAN endpoint may contain:
+
+* `cmd_id`
+* `answer_id`
+* optional `value_id` in `current.ids`
+* required `value_id` in `new.ids` when `new.default=false`
+
+`value_id` represents the CAN value frame ID (`VALUE_ID` / `CV_ID`).
 
 * `devices.config.current` describes the **actual current state**:
 
@@ -852,6 +897,29 @@ the list can also contain serials:
           answer_id: "0x107"
 ```
 
+and/or value ids:
+
+```yaml
+    current: 
+      default: false
+      ids:
+        - dev_no: 1
+          serial: 25455437
+          cmd_id: "0x102"
+          answer_id: "0x103"
+          value_id: "0x103"
+        - dev_no: 2
+          serial: 25455423
+          cmd_id: "0x104"
+          answer_id: "0x105"
+          value_id: "0x105"
+        - dev_no: 3
+          serial: 25455439
+          cmd_id: "0x106"
+          answer_id: "0x107"
+          value_id: "0x107"
+```
+
 and/or canbauds:
 
 ```yaml
@@ -885,12 +953,15 @@ and/or canbauds:
         - dev_no: 1
           cmd_id: "0x202"
           answer_id: "0x203"
+          value_id: "0x203"
         - dev_no: 2
           cmd_id: "0x204"
           answer_id: "0x205"
+          value_id: "0x205"
         - dev_no: 3
           cmd_id: "0x206"
           answer_id: "0x207"
+          value_id: "0x207"
 ```
 
 or
@@ -911,14 +982,17 @@ It can also contain serials (serial mapping):
           serial: 25455437
           cmd_id: "0x202"
           answer_id: "0x203"
+          value_id: "0x203"
         - dev_no: 2
           serial: 25455423
           cmd_id: "0x204"
           answer_id: "0x205"
+          value_id: "0x205"
         - dev_no: 3
           serial: 25455439
           cmd_id: "0x206"
           answer_id: "0x207"
+          value_id: "0x207"
 ```
 
 Additionally, default IDs and a default baudrate are configured:
@@ -930,6 +1004,7 @@ devices:
       default_canbaud: 1000000
       default_cmd_id: "0x100"
       default_ans_id: "0x101"
+      default_value_id: "0x101"
 ``` 
 
 For multi-device CAN bus operation, the baudrate should usually be switched to the baudrate from `dll.canbaud`:
@@ -963,11 +1038,15 @@ These checks are independent of the operating mode:
 
 * `dev_no` must be unique within each list
 
-* for each device: `cmd_id != answer_id`
+* `cmd_id` must differ from both `answer_id` and `value_id`
+
+* `answer_id == value_id` is allowed.
 
 * default IDs must not be identical:
 
     * `default_cmd_id != default_ans_id`
+
+    * `default_cmd_id != default_value_id`
 
 * required lists must not be empty:
 
@@ -983,10 +1062,11 @@ These checks are independent of the operating mode:
 
 Note:
 
-* `CV_ID` is not configured separately in YAML.
-* StartupCAN always derives it internally from `answer_id`.
-* During programming and verification, the tool enforces:
-  `CV_ID = answer_id`.
+* `value_id` is part of the YAML model.
+* in `current.ids`, `value_id` is optional
+* in `new.ids`, `value_id` is required if `new.default=false`
+* in default modes, `assign.default_value_id` is used
+* if `current.ids[*].value_id` is missing, StartupCAN does not guess it
 
 
 **CAN ID uniqueness rules**
@@ -996,7 +1076,9 @@ Note:
 
     * target IDs in `new.ids` must be strictly unique
 
-    * no number may occur twice across `cmd_id` and `answer_id`
+    * no number may occur twice across `cmd_id`, `answer_id`, and `value_id`
+
+    * exception: `answer_id == value_id` is allowed within the same device
 
 * If `current.default=false`:
 
@@ -1043,6 +1125,10 @@ If `new.default=false`:
 
 * `current.ids` and `new.ids` must contain the same `dev_no` 
 
+* `new.ids[*].value_id` is required
+
+* `current.ids[*].value_id` is optional
+
 * SN mode mixed configuration is not allowed:
 
     * if one entry in `new.ids` has `serial`, all must have `serial`
@@ -1072,6 +1158,7 @@ If `new.default=false`:
 
 **Case 2: `current.default=true` & `new.default=false`**
 
+* `new.ids[*].value_id` is required
 
 * SN mode mixed configuration is not allowed:
 
@@ -1094,6 +1181,9 @@ If `new.default=false`:
 
 **Case 3: `current.default=false` & `new.default=true`**
 
+* `current.ids[*].value_id` is optional
+
+* `new.ids` is ignored completely
 
 
 **Allowed in Case 3**
@@ -1104,7 +1194,7 @@ If `new.default=false`:
 
 * `new.ids` may contain serials or not, it is ignored
 
-* `current.ids` may contain serials or canbauds
+* `current.ids` may contain serials, canbauds and value_id
 
 
 ## Notes

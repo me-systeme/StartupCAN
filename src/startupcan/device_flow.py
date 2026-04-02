@@ -74,7 +74,8 @@ def _activate_or_record_failure(
         
 
     # Activation failed
-    # If target endpoint is unknown we cannot probe new endpoint
+    # If target endpoint is unknown (e.g. SN mapping not resolved),
+    # probing the "new" endpoint is not possible → fallback to safe plan
     if plan.cmd_new is None or plan.ans_new is None or plan.value_new is None:
         state = "unknown"
         fail_plan = plan.with_safe_new_ids()
@@ -264,7 +265,9 @@ def _handle_skip_if_same_endpoint(
     Skip reconfiguration only if:
     - the planned old endpoint equals the planned target endpoint, and
     - a hard readback verification on the actual device has confirmed
-      CMD, ANSWER, CV, and CANBAUD.
+      CMD, ANSWER, VALUE, and CANBAUD
+
+    This prevents false positives caused by stale or unknown YAML data.
 
     Returns:
         already_recorded,
